@@ -1,0 +1,8 @@
+# openspec/changes/UC-01-buscar-imagenes-fecha-area/.openspec.yaml
+schema: spec-driven
+change_id: UC-01-buscar-imagenes-fecha-area
+capability: UC-01-buscar-imagenes-fecha-area
+status: proposed
+created_at: 2026-04-23T11:57:00-05:00
+specs:
+  - ../../specs/UC-01-buscar-imagenes-fecha-area/spec.md

@@ -1,0 +1,25 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Tech stack: Python 3.9+, Streamlit (UI), pystac-client, planetary-computer, geopandas, leafmap, rasterio
+  API conventions: MPC STAC API via pystac_client, Planetary Computer Sign for authenticated URLs
+  Testing strategy: Unit tests per component, integration tests for STAC queries, manual verification via Streamlit UI
+  Architecture: Layered (Presentation → Application → Infrastructure)
+
+rules:
+  proposal:
+    - Include traceability to RF-XX and UC-XX
+    - Identify dependencies on other use cases
+  specs:
+    - Each spec represents ONE use case (UC-XX)
+    - Use ## Purpose and ## Requirements sections
+    - Use SHALL for mandatory requirements
+    - Each requirement MUST have at least one #### Scenario:
+  design:
+    - Include sequence diagrams for the use case flow
+    - Reference components from SDD
+
+project:
+  name: Sentinel Data Downloader
+  version: 1.0.0

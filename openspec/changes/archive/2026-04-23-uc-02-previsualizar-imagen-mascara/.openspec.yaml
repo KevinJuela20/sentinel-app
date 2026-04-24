@@ -1,0 +1,7 @@
+# openspec/changes/uc-02-previsualizar-imagen-mascara/.openspec.yaml
+name: uc-02-previsualizar-imagen-mascara
+description: Previsualización dinámica de imágenes Sentinel-2 con máscara de transparencia AOI.
+schema: spec-driven
+status: in-progress
+depends_on:
+  - uc-01-buscar-imagenes-fecha-area
