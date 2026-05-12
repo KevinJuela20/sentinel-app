@@ -39,7 +39,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Ruta por defecto al archivo KML
-DEFAULT_KML_PATH = str(Path(__file__).parent / "external" / "ARH_MAP.kml")
+DEFAULT_KML_PATH = str(Path(__file__).parent / "external" / "ARH_ETAPA.kml")
 
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
