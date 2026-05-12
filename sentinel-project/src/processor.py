@@ -10,13 +10,17 @@ Responsabilidades:
 """
 
 import logging
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 import numpy as np
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
 from rasterio.warp import transform_geom
+from rasterio.windows import from_bounds
+from rasterio.enums import Resampling
+from shapely.geometry import shape
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +56,7 @@ def is_crop_clean(scl_data: np.ndarray, threshold: float = 0.05) -> tuple[bool, 
 
 
 def process_grid_cell(tif_paths: dict, cell_geom: dict, cell_id: str, 
-                      output_dir: Path, date_str: str) -> Optional[str]:
+                      output_dir: Path, date_str: str, tile_id: str) -> Optional[str]:
     """
     Procesa una celda individual: recorta, filtra nubes y guarda PNG si está limpia.
     
@@ -62,6 +66,7 @@ def process_grid_cell(tif_paths: dict, cell_geom: dict, cell_id: str,
         cell_id: Identificador de la celda.
         output_dir: Directorio donde guardar los recortes.
         date_str: Fecha para el nombre del archivo.
+        tile_id: Identificador del tile (ej: MPS).
         
     Returns:
         Ruta al PNG generado o None si fue descartado.
@@ -69,32 +74,63 @@ def process_grid_cell(tif_paths: dict, cell_geom: dict, cell_id: str,
     from src.image_utils import save_rgb_png
     
     scl_path = tif_paths.get("SCL")
-    if not scl_path or not Path(scl_path).exists():
-        logger.warning("No se encontró banda SCL para celda %s", cell_id)
+    b04_path = tif_paths.get("B04")
+    
+    if not scl_path or not b04_path:
+        logger.warning("Faltan bandas esenciales (SCL o B04) para celda %s", cell_id)
         return None
 
     try:
-        # 1. Verificar nubes con SCL
-        with rasterio.open(scl_path) as src:
-            # Transformar geometría al CRS del raster (UTM)
-            target_geom = transform_geom("EPSG:4326", src.crs, cell_geom)
+        # 1. Abrir B04 como referencia (10m)
+        with rasterio.open(b04_path) as src_ref:
+            ref_crs = src_ref.crs
+            ref_transform = src_ref.transform
             
-            scl_image, _ = mask(src, [target_geom], crop=True)
-            clean, perc = is_crop_clean(scl_image)
+            # Transformar geometría al CRS de referencia (UTM)
+            target_geom = transform_geom("EPSG:4326", ref_crs, cell_geom)
+            geom_shape = shape(target_geom)
+            bounds = geom_shape.bounds
             
-        if not clean:
-            logger.info("Celda %s descartada por nubes (%.1f%%)", cell_id, perc * 100)
-            return None
+            # Calcular ventana de extracción en base a B04
+            window = from_bounds(*bounds, transform=ref_transform)
+            h_ref, w_ref = int(window.height), int(window.width)
+            
+            # 1.1 Validación de Dimensiones (Task 2.2 / 3.1)
+            # Descartar si es menor a 63 píxeles en cualquier eje (evitar bordes incompletos)
+            if h_ref < 63 or w_ref < 63:
+                logger.info("Celda %s descartada por tamaño insuficiente: %dx%d", cell_id, w_ref, h_ref)
+                return None
 
-        # 2. Extraer B04, B03, B02 para RGB
-        rgb_data = {}
-        for band in ["B04", "B03", "B02"]:
-            with rasterio.open(tif_paths[band]) as src:
-                img, _ = mask(src, [target_geom], crop=True)
-                rgb_data[band] = img[0] # Usar primer canal
+            # 2. Validar nubes con SCL en su resolución nativa (20m)
+            with rasterio.open(scl_path) as src_scl:
+                # Transformar geometría al CRS de SCL (normalmente el mismo UTM)
+                target_geom_scl = transform_geom("EPSG:4326", src_scl.crs, cell_geom)
+                try:
+                    scl_crop, _ = mask(src_scl, [target_geom_scl], crop=True)
+                except ValueError:
+                    # Si no hay solapamiento, simplemente saltamos la celda sin error
+                    return None
+                
+                clean, perc = is_crop_clean(scl_crop)
+                
+            if not clean:
+                logger.info("Celda %s descartada por nubes (%.1f%%)", cell_id, perc * 100)
+                return None
 
-        # 3. Guardar PNG
-        output_path = output_dir / f"{cell_id}_{date_str.replace('-', '')}.png"
+            # 3. Extraer bandas RGB (B04, B03, B02) alineadas a la ventana de B04
+            rgb_data = {}
+            for band in ["B04", "B03", "B02"]:
+                with rasterio.open(tif_paths[band]) as src:
+                    # Leer usando la ventana de referencia y resampling bilineal si es necesario
+                    rgb_data[band] = src.read(
+                        1, 
+                        window=window, 
+                        out_shape=(h_ref, w_ref),
+                        resampling=Resampling.bilinear
+                    )
+
+        # 4. Guardar PNG
+        output_path = output_dir / f"{cell_id}_{date_str.replace('-', '')}_{tile_id}.png"
         save_rgb_png(rgb_data["B04"], rgb_data["B03"], rgb_data["B02"], str(output_path))
         
         return str(output_path)
@@ -121,21 +157,32 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
     if not tifs:
         return {"error": "No se encontraron archivos .tif"}
         
-    # Organizar por item_id y banda
-    # Supone formato YYYYMMDD_BAND.tif o similar
-    # Realmente en UC-04 los nombramos YYYYMMDD_BAND.tif. 
-    # Pero si hay varios items el mismo día, necesitamos discriminarlos.
-    # El FileManager usa: f"{date_compact}_{band_name}.tif"
-    # Ajustamos para encontrar las bandas necesarias:
-    bands_found = {}
+    # 1. Agrupar archivos .tif por Tile ID (Task 2.1)
+    # Formato esperado: YYYYMMDD_TILE_BAND.tif
+    tiles_data = {} # dict[tile_id -> dict[band_name -> path]]
+    
     for t in tifs:
-        band = None
-        for b in ["B02", "B03", "B04", "SCL", "visual"]:
-            if b in t.name:
-                band = b
-                break
-        if band:
-            bands_found[band] = str(t)
+        # Regex para extraer Tile ID y Banda
+        match = re.search(r"(\d{8})_([A-Z0-9]{3})_([A-Z0-9]+)\.tif", t.name)
+        if match:
+            _, tile_id, band = match.groups()
+            if tile_id not in tiles_data:
+                tiles_data[tile_id] = {}
+            tiles_data[tile_id][band] = str(t)
+        else:
+            # Fallback para el formato antiguo o si falta el tile_id
+            band = None
+            for b in ["B02", "B03", "B04", "SCL"]:
+                if b in t.name:
+                    band = b
+                    break
+            if band:
+                if "UNKNOWN" not in tiles_data:
+                    tiles_data["UNKNOWN"] = {}
+                tiles_data["UNKNOWN"][band] = str(t)
+
+    if not tiles_data:
+        return {"error": "No se pudieron organizar los archivos .tif por banda/tile."}
 
     # 2. Cargar cuadrícula
     grid_gdf = gpd.read_file(grid_path)
@@ -153,18 +200,128 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
     except:
         date_str = date_dir.name
     
-    for _, row in grid_gdf.iterrows():
-        cell_id = str(row.get("id", row.index[0]))
-        geom = row.geometry.__geo_interface__
-        
-        res = process_grid_cell(bands_found, geom, cell_id, crops_dir, date_str)
-        if res:
-            stats["saved"] += 1
-        else:
-            stats["skipped"] += 1
+    for tile_id, bands_found in tiles_data.items():
+        logger.info("Procesando Tile: %s", tile_id)
+        for _, row in grid_gdf.iterrows():
+            cell_id = str(row.get("id", row.index[0]))
+            geom = row.geometry.__geo_interface__
             
-    # 5. Limpieza (Task 2.2)
-    if delete_originals and stats["saved"] > 0:
+            res = process_grid_cell(bands_found, geom, cell_id, crops_dir, date_str, tile_id)
+            if res:
+                stats["saved"] += 1
+            else:
+                stats["skipped"] += 1
+            
+    # 5. Generar Mosaico RGB del Área de Estudio (ARH_ETAPA.kml)
+    mosaic_success = False
+    try:
+        from src.geo_utils import load_kml_geometry
+        from rasterio.merge import merge
+        import tempfile
+        
+        # Intentar encontrar el KML en rutas comunes
+        possible_kml_paths = [
+            Path("external/ARH_ETAPA.kml"),
+            Path("sentinel-project/external/ARH_ETAPA.kml"),
+            Path(__file__).parent.parent / "external" / "ARH_ETAPA.kml"
+        ]
+        
+        kml_file = None
+        for p in possible_kml_paths:
+            if p.exists():
+                kml_file = p
+                break
+
+        if kml_file:
+            logger.info("Generando mosaico RGB del área de estudio (AOI) usando %s...", kml_file)
+            study_area_geom = load_kml_geometry(str(kml_file))
+            
+            tile_rgb_crops = []
+            temp_paths = []
+            
+            for tile_id, bands_found in tiles_data.items():
+                # Verificar que tengamos las bandas RGB
+                if all(b in bands_found for b in ["B04", "B03", "B02"]):
+                    with rasterio.open(bands_found["B04"]) as src_b04:
+                        # Transformar geometría al CRS del tile para el recorte
+                        target_geom = transform_geom("EPSG:4326", src_b04.crs, study_area_geom.__geo_interface__)
+                        
+                        # 5.1 Leer bandas y aplicar máscara KML
+                        # Usamos crop=True para obtener solo el área del KML en este tile
+                        try:
+                            b04_data, out_transform = mask(src_b04, [target_geom], crop=True)
+                        except ValueError:
+                            # El AOI no solapa con este tile
+                            logger.info("Tile %s no intersecta con el área del KML. Saltando...", tile_id)
+                            continue
+                        
+                        with rasterio.open(bands_found["B03"]) as src_b03:
+                            b03_data, _ = mask(src_b03, [target_geom], crop=True)
+                        with rasterio.open(bands_found["B02"]) as src_b02:
+                            b02_data, _ = mask(src_b02, [target_geom], crop=True)
+                        
+                        # Combinar en un stack RGB (3, H, W)
+                        rgb_stack = np.concatenate([b04_data, b03_data, b02_data])
+                        
+                        # 5.2 Guardar recorte temporal de este tile para el merge final
+                        temp_tif = tempfile.NamedTemporaryFile(suffix=f"_{tile_id}_rgb.tif", delete=False)
+                        temp_paths.append(temp_tif.name)
+                        
+                        out_meta = src_b04.meta.copy()
+                        out_meta.update({
+                            "driver": "GTiff",
+                            "height": rgb_stack.shape[1],
+                            "width": rgb_stack.shape[2],
+                            "transform": out_transform,
+                            "count": 3
+                        })
+                        
+                        with rasterio.open(temp_tif.name, "w", **out_meta) as dest:
+                            dest.write(rgb_stack)
+                        
+                        # Reabrir el archivo temporal para pasarlo a merge
+                        tile_rgb_crops.append(rasterio.open(temp_tif.name))
+            
+            if tile_rgb_crops:
+                # 5.3 Realizar el merge de los recortes de cada tile
+                mosaic, mosaic_transform = merge(tile_rgb_crops)
+                
+                # 5.4 Guardar mosaico final al lado de la carpeta crops
+                y, m, d = date_dir.parts[-3:]
+                final_mosaic_name = f"Color_{y}-{m}-{d}.tif"
+                mosaic_path = date_dir / final_mosaic_name
+                
+                out_meta = tile_rgb_crops[0].meta.copy()
+                out_meta.update({
+                    "height": mosaic.shape[1],
+                    "width": mosaic.shape[2],
+                    "transform": mosaic_transform
+                })
+                
+                with rasterio.open(mosaic_path, "w", **out_meta) as dest:
+                    dest.write(mosaic)
+                
+                logger.info("Mosaico RGB del área de estudio creado: %s", mosaic_path)
+                mosaic_success = True
+                
+                # Cerrar y eliminar temporales
+                for src in tile_rgb_crops:
+                    src.close()
+                for tp in temp_paths:
+                    try:
+                        Path(tp).unlink()
+                    except:
+                        pass
+        else:
+            logger.warning("No se encontró el archivo ARH_ETAPA.kml en sentinel-project/external/. Se omite el mosaico.")
+
+    except Exception as exc:
+        logger.error("Error durante la generación del mosaico RGB: %s", exc)
+
+    # 6. Limpieza (Task 3.1)
+    # Solo eliminar originales si los crops se generaron Y el mosaico fue exitoso
+    if delete_originals and stats["saved"] > 0 and mosaic_success:
+        logger.info("Limpiando bandas individuales (.tif) tras procesamiento exitoso.")
         for t in tifs:
             try:
                 t.unlink()

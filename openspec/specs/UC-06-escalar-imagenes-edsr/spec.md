@@ -1,37 +1,20 @@
 ## Purpose
 
 Aumentar la resolución de los recortes limpios para permitir una mejor detección de cambios. Los archivos PNG generados en UC-05 se redimensionan a 128x128 y luego se aplican modelos de super-resolución EDSR para obtener imágenes de 1024x1024.
-
 ## Requirements
-
 ### Requirement: Super-resolución con Modelos EDSR (RF-06)
-El sistema SHALL redimensionar los recortes limpios a exactamente 128x128 píxeles antes de procesar. El pipeline de super-resolución debe consistir en la aplicación secuencial de dos modelos: EDSR x4 (resultando en 512x512) y EDSR x2 (resultando en 1024x1024). Las imágenes resultantes deben guardarse en formato PNG de 8 bits con el sufijo `_SR`.
+El sistema SHALL redimensionar los recortes limpios a exactamente 128x128 píxeles antes de procesar. El pipeline de super-resolución debe consistir en la aplicación secuencial de dos modelos: EDSR x4 (resultando en 512x512) y EDSR x2 (resultando en 1024x1024). El sistema SHALL asegurar la estabilidad del pipeline mediante el uso de la versión de biblioteca `opencv-contrib-python-headless==4.12.0.88` para garantizar la disponibilidad del módulo `dnn_superres`. El sistema SHALL manejar correctamente la carga de modelos DNN para evitar errores de biblioteca (`AttributeError`) y garantizando que el resultado final sea exactamente 1024x1024 píxeles. Las imágenes resultantes deben guardarse en formato PNG de 8 bits con el sufijo `_SR`. Tras completar el proceso con éxito, el sistema SHALL eliminar los archivos temporales de recortes (`crops/`) y reiniciar el estado de la aplicación.
 
-#### Scenario: Escalado exitoso de un recorte limpio
-- **WHEN** el sistema identifica un archivo `.png` en la subcarpeta `crops/` de una fecha
+#### Scenario: Escalado exitoso de un recorte limpio con estabilidad de biblioteca y limpieza
+- **WHEN** el sistema identifica un archivo `.png` en la subcarpeta `crops/` de una fecha (independientemente del tile de origen)
 - **THEN** redimensiona la imagen a 128x128 píxeles usando interpolación bicúbica si es necesario
-- **AND** aplica el modelo `EDSR_x4.pb` obteniendo una resolución de 512x512
-- **AND** aplica el modelo `EDSR_x2.pb` obteniendo una resolución de 1024x1024
-- **AND** guarda el archivo en la subcarpeta `super_res/` con el nombre `[original]_SR.png`
+- **AND** inicializa el motor DNN y carga el modelo `EDSR_x4.pb` obteniendo una resolución de 512x512
+- **AND** reconfigura el motor DNN para el modelo `EDSR_x2.pb` obteniendo una resolución de 1024x1024
+- **AND** guarda el archivo en la subcarpeta `super_res/` con el nombre `[original]_SR.png` (manteniendo la referencia al tile)
 - **AND** verifica que el tamaño del archivo final sea exactamente 1024x1024 píxeles
-
-#### Scenario: Error por falta de archivos de modelo
-- **WHEN** el sistema intenta iniciar el proceso de super-resolución
-- **AND** no se encuentran los archivos `.pb` en la carpeta `models/`
-- **THEN** detiene el proceso de escalado para esa imagen
-- **AND** informa al usuario sobre la ausencia de los modelos requeridos mediante una alerta en la UI
-- **AND** permite continuar con el procesamiento si se cargan los archivos faltantes
-
-#### Scenario: Proceso completo de super-resolución
-- **WHEN** todos los recortes limpios de una fecha han sido procesados
-- **THEN** el sistema notifica al usuario que el proceso de super-resolución ha concluido
-- **AND** muestra un resumen con cantidad de imágenes procesadas
-
-#### Scenario: Error en modelo EDSR
-- **WHEN** el modelo EDSR falla al procesar una imagen
-- **THEN** el sistema registra el error en el log
-- **AND** conserva la imagen original sin escalar
-- **AND** continúa con las demás imágenes
+- **AND** maneja cualquier excepción de biblioteca de forma que no se interrumpa el flujo del proceso
+- **AND** una vez procesadas todas las imágenes de la fecha, ELIMINA la carpeta `crops/` correspondiente
+- **AND** REINICIA las variables de sesión de búsqueda y selección para permitir un nuevo ciclo de trabajo
 
 ## Acceptance Criteria
 - Los recortes se redimensionan correctamente a 128x128 antes del escalado

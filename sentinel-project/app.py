@@ -11,15 +11,16 @@ UC-03: Selección de imágenes y cola de descarga (RF-03)
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import streamlit as st
 
 from src.geo_utils import load_aoi
-from src.search_controller import SearchResult, STACItem, search_images, validate_date_range
+from src.search_controller import SearchResult, STACItem, search_images, validate_date_range, group_by_date
 from src.preview_engine import get_masked_preview
 from src.downloader import download_item_bands
-from src.file_manager import get_output_dir, DEFAULT_BANDS
+from src.file_manager import get_output_dir, DEFAULT_BANDS, check_date_data_exists
 from src.processor import process_all_grids
 from src.super_resolution import process_super_res_batch
 
@@ -38,7 +39,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Ruta por defecto al archivo KML
-DEFAULT_KML_PATH = str(Path(__file__).parent / "external" / "ARH_ETAPA.kml")
+DEFAULT_KML_PATH = str(Path(__file__).parent / "external" / "ARH_MAP.kml")
 
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
@@ -55,13 +56,27 @@ def _init_session():
     defaults = {
         "search_result": None,       # SearchResult | None
         "aoi_geom": None,            # GeoJSON dict | None
-        "kml_error": None,           # str | None
-        "download_queue": {},        # dict[item_id -> STACItem]  — persistent across searches
+        "download_queue": {},        # dict[date_str -> list[STACItem]] — persistent across searches
         "selection_confirmed": False, # True after user confirms selection
+        "grid_processed": False,     # True if crops/ folder is found or after processing
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    
+    # Auto-load AOI at startup (Task 1.1)
+    if st.session_state["aoi_geom"] is None:
+        _load_aoi_cached(DEFAULT_KML_PATH)
+
+
+def _reset_app_state():
+    """Limpia el estado de la aplicación para permitir una nueva búsqueda limpia."""
+    logger.info("Reiniciando estado de la aplicación...")
+    st.session_state["search_result"] = None
+    st.session_state["download_queue"] = {}
+    st.session_state["selection_confirmed"] = False
+    st.session_state["grid_processed"] = False
+    # No limpiamos el AOI ya que suele ser el mismo para el proyecto
 
 
 # ---------------------------------------------------------------------------
@@ -73,16 +88,13 @@ def _load_aoi_cached(kml_path: str):
     try:
         geom = load_aoi(kml_path)
         st.session_state["aoi_geom"] = geom
-        st.session_state["kml_error"] = None
         return geom
     except FileNotFoundError:
-        msg = f"Archivo KML no encontrado: `{kml_path}`"
-        st.session_state["kml_error"] = msg
+        logger.error("Archivo KML no encontrado: %s", kml_path)
         st.session_state["aoi_geom"] = None
         return None
     except Exception as exc:  # noqa: BLE001
-        msg = f"Error al leer el KML: {exc}"
-        st.session_state["kml_error"] = msg
+        logger.error("Error al leer el KML: %s", exc)
         st.session_state["aoi_geom"] = None
         return None
 
@@ -104,25 +116,12 @@ def render_sidebar() -> dict | None:
         st.caption("Descarga y procesa imágenes Sentinel-2 L2A")
         st.divider()
 
-        # --- KML / AOI ---
-        st.subheader("📍 Área de Estudio")
-
-        kml_path = st.text_input(
-            "Ruta al archivo KML",
-            value=DEFAULT_KML_PATH,
-            help="Archivo KML que define el Área de Interés (AOI).",
-            key="kml_path_input",
-        )
-
-        if st.button("📂 Cargar AOI", use_container_width=True, key="btn_load_aoi"):
-            with st.spinner("Cargando AOI…"):
-                _load_aoi_cached(kml_path)
-
-        if st.session_state["kml_error"]:
-            st.error(st.session_state["kml_error"])
-        elif st.session_state["aoi_geom"]:
+        # --- KML / AOI Indicator (Task 2.2) ---
+        if st.session_state.get("aoi_geom"):
             geom_type = st.session_state["aoi_geom"].get("type", "?")
-            st.success(f"✅ AOI cargado — tipo: **{geom_type}**")
+            st.success(f"✅ AOI cargado (**{geom_type}**)")
+        else:
+            st.error("⚠️ AOI no disponible. Verifique `external/ARH_MAP.kml`")
 
         st.divider()
 
@@ -176,7 +175,7 @@ def render_sidebar() -> dict | None:
         # --- Botón de búsqueda (Task 3.2) ---
         buscar = st.button(
             "🔍 Buscar Imágenes",
-            use_container_width=True,
+            width="stretch",
             type="primary",
             key="btn_buscar",
         )
@@ -187,7 +186,6 @@ def render_sidebar() -> dict | None:
                 "anio_inicio": int(anio_inicio),
                 "mes_fin": int(mes_fin),
                 "anio_fin": int(anio_fin),
-                "kml_path": kml_path,
             }
 
     return None
@@ -237,14 +235,13 @@ def _run_search(params: dict):
         st.error(f"⚠️ **Fechas inválidas:** {date_error}")
         return
 
-    # Cargar AOI si no está en sesión
+    # Cargar AOI si no está en sesión (Task 3.1)
     aoi_geom = st.session_state.get("aoi_geom")
     if aoi_geom is None:
-        aoi_geom = _load_aoi_cached(params["kml_path"])
+        aoi_geom = _load_aoi_cached(DEFAULT_KML_PATH)
         if aoi_geom is None:
-            err_msg = st.session_state.get("kml_error", "Error desconocido")
-            st.error(f"⚠️ **No se pudo cargar el AOI:** {err_msg}")
-            st.info("Verifique la ruta al archivo KML en la barra lateral.")
+            st.error("⚠️ **No se pudo cargar el AOI.**")
+            st.info(f"Verifique que el archivo `{DEFAULT_KML_PATH}` existe.")
             return
 
     # Task 3.2 + Task 2.2: Ejecutar búsqueda con spinner
@@ -258,6 +255,7 @@ def _run_search(params: dict):
         )
 
     st.session_state["search_result"] = result
+    st.session_state["grid_processed"] = False # Reset on new search (Task 1.3)
     # NOTE: download_queue is NOT cleared here — selections persist across searches (RF-03)
 
 
@@ -291,15 +289,32 @@ def _render_results(result: SearchResult):
     st.divider()
     st.subheader("📋 Galería de Imágenes")
 
-    # Contenedor para la galería
-    grid_cols = 3
-    rows = [result.items[i : i + grid_cols] for i in range(0, len(result.items), grid_cols)]
+    # --- Pre-carga de imágenes en paralelo (parallel-image-loading) ---
+    aoi_geom = st.session_state.get("aoi_geom")
+    grouped_items = group_by_date(result.items)
+    # Filtrar fechas que tengan exactamente 3 tiles para evitar IndexError y asegurar cobertura (Task 1.1)
+    dates = sorted([d for d, items in grouped_items.items() if len(items) == 3], reverse=True)
 
-    for row in rows:
-        cols = st.columns(grid_cols)
-        for i, item in enumerate(row):
-            with cols[i]:
-                _render_item_card(item)
+    if aoi_geom and dates:
+        with st.spinner("Descargando y procesando previsualizaciones en paralelo..."):
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                # Incluir todos los tiles de cada fecha para la previsualización (Task 1.1)
+                items_to_load = []
+                for d in dates:
+                    day_items = grouped_items[d]
+                    for it in day_items:
+                        if it.assets.get("rendered_preview"):
+                            items_to_load.append(it)
+
+                # Pre-calentar la caché (pre-warm cache)
+                list(executor.map(
+                    lambda it: _get_cached_preview(it.item_id, it.assets["rendered_preview"], aoi_geom, it.bbox),
+                    items_to_load
+                ))
+
+    # Lista vertical de fechas (Task 2.1)
+    for d in dates:
+        _render_date_section(d, grouped_items[d])
 
     # --- Resumen de Selección (UC-03: Tasks 2.1 + 2.2 + 2.3) ---
     st.divider()
@@ -307,79 +322,101 @@ def _render_results(result: SearchResult):
 
 
 @st.cache_data(show_spinner="Renderizando previa...")
-def _get_cached_preview(item_id: str, preview_url: str, aoi_geom: dict):
-    """Wrapper para cachear la generación de previas recortadas."""
-    return get_masked_preview(preview_url, aoi_geom)
+def _get_cached_preview(item_id: str, preview_url: str, aoi_geom: dict, bbox: list[float]):
+    """Wrapper para cachear la generación de previas con contorno."""
+    return get_masked_preview(preview_url, aoi_geom, bbox)
 
 
-def _render_item_card(item: STACItem):
-    """Renderiza una card individual para un item STAC."""
-    # Contenedor con borde (simulado con div)
+def _render_date_section(date_str: str, items: list[STACItem]):
+    """Renderiza una sección por fecha mostrando sus tres tiles (Task 2.2, 2.3, 2.4)."""
     with st.container(border=True):
-        # 1. Imagen recortada
-        preview_url = item.assets.get("rendered_preview")
-        if preview_url and st.session_state["aoi_geom"]:
-            img = _get_cached_preview(item.item_id, preview_url, st.session_state["aoi_geom"])
-            if img:
-                st.image(img, use_container_width=True)
+        # 1. Cabecera con Selección
+        col_title, col_check = st.columns([3, 1])
+        with col_title:
+            avg_clouds = sum(it.cloud_cover for it in items) / len(items)
+            cloud_color = "green" if avg_clouds < 10 else "orange" if avg_clouds < 30 else "red"
+            st.markdown(f"### 📅 Fecha: `{date_str}` (☁️ {avg_clouds:.1f}%)")
+        
+        with col_check:
+            queue = st.session_state["download_queue"]
+            is_selected = date_str in queue
+            if st.checkbox("Seleccionar Fecha", key=f"sel_{date_str}", value=is_selected):
+                if date_str not in queue:
+                    queue[date_str] = items
             else:
-                st.warning("⚠️ Previa no disponible")
-        else:
-            st.info("ℹ️ Sin asset de previsualización")
+                queue.pop(date_str, None)
 
-        # 2. Metadatos
-        col_meta1, col_meta2 = st.columns([2, 1])
-        with col_meta1:
-            st.markdown(f"**Fecha:** `{item.datetime[:10]}`")
-            st.caption(f"ID: {item.item_id[:15]}...")
-        with col_meta2:
-            # Color de nubes
-            cloud_color = "green" if item.cloud_cover < 10 else "orange" if item.cloud_cover < 30 else "red"
-            st.markdown(f":{cloud_color}[☁️ {item.cloud_cover:.1f}%]")
-
-        # 3. Selección — lee/escribe en download_queue (UC-03 Task 1.2)
-        queue = st.session_state["download_queue"]
-        is_selected = item.item_id in queue
-        if st.checkbox("Seleccionar", key=f"sel_{item.item_id}", value=is_selected):
-            if item.item_id not in queue:
-                queue[item.item_id] = item
-        else:
-            queue.pop(item.item_id, None)
+        # 2. Visualización de los 3 Tiles (Task 2.3)
+        cols = st.columns(3)
+        # Ordenar tiles para consistencia (ej: MPS, MQT, MQS)
+        sorted_items = sorted(items, key=lambda it: it.item_id.split("_")[-1])
+        
+        for i, it in enumerate(sorted_items):
+            with cols[i]:
+                tile_id = it.item_id.split("_")[-1]
+                preview_url = it.assets.get("rendered_preview")
+                
+                if preview_url and st.session_state["aoi_geom"]:
+                    img = _get_cached_preview(it.item_id, preview_url, st.session_state["aoi_geom"], it.bbox)
+                    if img:
+                        st.image(img, width="stretch", caption=f"Tile: {tile_id}")
+                    else:
+                        st.warning(f"⚠️ Previa {tile_id} no disponible")
+                else:
+                    st.info(f"ℹ️ Sin asset para {tile_id}")
+                
+                # Metadatos del tile (Task 2.4)
+                cloud_val = it.cloud_cover
+                c_color = "green" if cloud_val < 10 else "orange" if cloud_val < 30 else "red"
+                st.markdown(f"**{tile_id}**: :{c_color}[☁️ {cloud_val:.1f}%]")
 
 
 # ---------------------------------------------------------------------------
 # Resumen de selección y confirmación (UC-03)
 # ---------------------------------------------------------------------------
 
+def _check_if_crops_exist():
+    """Verifica si existen recortes en disco para habilitar SR (Task 2.1)."""
+    sentinel_data_path = Path(__file__).parent / "Data_Sentinel"
+    if sentinel_data_path.exists():
+        has_crops = any(sentinel_data_path.rglob("crops/*.png"))
+        if has_crops:
+            st.session_state["grid_processed"] = True
+        return has_crops
+    return False
+
+
 def _render_selection_summary():
-    """Muestra el resumen de imágenes seleccionadas y el botón de confirmación."""
+    """Muestra el resumen de fechas seleccionadas y el botón de confirmación."""
     queue = st.session_state["download_queue"]
-    count = len(queue)
+    count_dates = len(queue)
+    total_tiles = sum(len(items) for items in queue.values())
 
     st.subheader("📦 Cola de Descarga")
 
-    if count == 0:
+    if count_dates == 0:
         st.info(
-            "💡 **Seleccione imágenes** de la galería marcando los checkboxes. "
-            "Las selecciones se mantienen aunque cambie de búsqueda."
+            "💡 **Seleccione fechas** de la galería marcando los checkboxes. "
+            "Se descargarán automáticamente los 3 tiles correspondientes por cada día."
         )
         return
 
-    # Feedback visual: chips con los IDs seleccionados (Task 2.3)
-    st.success(f"📌 **{count} imagen(es) en la cola de descarga**")
+    # Feedback visual
+    st.success(f"📌 **{count_dates} fecha(s)** seleccionada(s) (Total: **{total_tiles} tiles**)")
 
-    with st.expander("Ver imágenes seleccionadas", expanded=False):
-        for item_id, item in list(queue.items()):
-            col_id, col_date, col_cloud, col_rm = st.columns([3, 2, 1, 1])
-            with col_id:
-                st.text(item.item_id[:25])
+    with st.expander("Ver detalle de fechas", expanded=False):
+        for date_str, items in list(queue.items()):
+            col_date, col_tiles, col_cloud, col_rm = st.columns([3, 2, 2, 1])
             with col_date:
-                st.text(item.datetime[:10] if item.datetime else "—")
+                st.markdown(f"📅 **{date_str}**")
+            with col_tiles:
+                st.text(f"Tiles: {len(items)}")
             with col_cloud:
-                st.text(f"☁️ {item.cloud_cover:.0f}%")
+                avg_clouds = sum(it.cloud_cover for it in items) / len(items)
+                st.text(f"☁️ Prom: {avg_clouds:.0f}%")
             with col_rm:
-                if st.button("❌", key=f"rm_{item_id}", help="Quitar de la cola"):
-                    queue.pop(item_id, None)
+                if st.button("❌", key=f"rm_{date_str}", help="Quitar fecha"):
+                    queue.pop(date_str, None)
                     st.rerun()
 
     # Botón de confirmación (Task 2.2)
@@ -387,26 +424,23 @@ def _render_selection_summary():
     col_confirm, col_clear = st.columns([3, 1])
     with col_confirm:
         if st.button(
-            f"✅ Confirmar Selección ({count} imágenes)",
-            use_container_width=True,
+            f"✅ Confirmar Selección ({total_tiles} tiles en {count_dates} días)",
+            width="stretch",
             type="primary",
             key="btn_confirmar_seleccion",
         ):
-            if count == 0:
-                st.error("⚠️ Debe seleccionar al menos una imagen antes de confirmar.")
-            else:
-                st.session_state["selection_confirmed"] = True
-                st.success(
-                    f"✅ **Selección confirmada.** {count} imagen(es) listas para descarga. "
-                )
+            st.session_state["selection_confirmed"] = True
+            st.success(
+                f"✅ **Selección confirmada.** {total_tiles} tiles listos para descarga. "
+            )
 
     # --- Ejecución de Descarga (UC-04: Tasks 3.1 + 3.2 + 3.3) ---
-    if st.session_state.get("selection_confirmed") and count > 0:
+    if st.session_state.get("selection_confirmed") and count_dates > 0:
         st.divider()
         st.subheader("🚀 Ejecutar Descarga")
         st.info("Se descargarán las bandas: " + ", ".join(DEFAULT_BANDS))
         
-        if st.button("📥 Iniciar Procesamiento y Descarga", use_container_width=True, type="primary"):
+        if st.button("📥 Iniciar Procesamiento y Descarga", width="stretch", type="primary"):
             _run_download_process(queue)
 
             st.session_state["selection_confirmed"] = False
@@ -426,11 +460,15 @@ def _render_selection_summary():
         col_proc, col_clean = st.columns([2, 1])
         with col_proc:
             do_cleanup = st.checkbox("Limpiar archivos .tif temporales al finalizar", value=True)
-            if st.button("🏗️ Generar Recortes Limpios", use_container_width=True):
+            if st.button("🏗️ Generar Recortes Limpios", width="stretch"):
                 _run_grid_processing(do_cleanup)
+                st.rerun()
 
     # --- Super-Resolución IA (UC-06: Tasks 3.1 + 3.2 + 3.3) ---
-    if os.path.exists("Data_Sentinel") and any(Path("Data_Sentinel").rglob("crops/*.png")):
+    # Task 2.2 + 2.3: Solo mostrar si la cuadrícula ha sido procesada
+    _check_if_crops_exist()
+    
+    if st.session_state.get("grid_processed"):
         st.divider()
         st.subheader("✨ Super-Resolución IA (EDSR x8)")
         st.info(
@@ -438,13 +476,21 @@ def _render_selection_summary():
             "de los recortes de 128x128 a 1024x1024 píxeles."
         )
         
-        if st.button("🚀 Iniciar Super-Resolución", use_container_width=True, type="primary"):
+        if st.button("🚀 Iniciar Super-Resolución", width="stretch", type="primary"):
             _run_super_res_process()
+    elif sentinel_data_path.exists() and any(sentinel_data_path.rglob("*.tif")):
+        # Mostrar mensaje guía si hay datos pero no han sido procesados (Task 2.3)
+        st.divider()
+        st.subheader("✨ Super-Resolución IA")
+        st.info("💡 **Paso previo requerido:** Debe generar los recortes limpios en la sección superior antes de iniciar el aumento de resolución.")
 
 
 def _run_download_process(queue: dict):
     """Ejecuta el proceso de descarga con barra de progreso."""
-    total_items = len(queue)
+    count_dates = len(queue)
+    total_tiles = sum(len(items) for items in queue.values())
+    total_bands_overall = total_tiles * len(DEFAULT_BANDS)
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -452,39 +498,49 @@ def _run_download_process(queue: dict):
     base_dir = Path(__file__).parent / "Data_Sentinel"
     downloaded_files = []
     
-    # AOI detallado para el recorte (preferir Cuadrícula_ARH si existe)
-    # Por ahora usamos el aoi_geom cargado del KML
+    # AOI detallado para el recorte
     mask_geom = st.session_state.get("aoi_geom")
     
-    for idx, (item_id, item) in enumerate(queue.items()):
+    current_band_count = 0
+    
+    for date_idx, (date_str, items) in enumerate(queue.items()):
         # Parsear fecha
-        dt = item.datetime[:10]  # YYYY-MM-DD
-        y, m, d = map(int, dt.split("-"))
+        y, m, d = map(int, date_str.split("-"))
         
-        status_text.markdown(f"📦 Procesando item {idx+1}/{total_items}: `{item_id[:20]}...`")
-        
-        # Crear directorio de salida
+        # Validar si ya existen los datos para esta fecha
+        if check_date_data_exists(str(base_dir), y, m, d, items, DEFAULT_BANDS, date_str):
+            status_text.info(f"⏭️ Omitiendo fecha `{date_str}`: Datos ya existentes localmente.")
+            # Actualizar progreso para las bandas omitidas
+            current_band_count += len(items) * len(DEFAULT_BANDS)
+            progress_bar.progress(min(current_band_count / total_bands_overall, 1.0))
+            continue
+
+        # Crear directorio de salida una sola vez por fecha
         output_dir = get_output_dir(base_dir, y, m, d)
         
-        # Callback para progreso interno de bandas
-        def _update_band_progress(b_idx, b_total, b_name):
-            sub_prog = (idx / total_items) + (b_idx / b_total / total_items)
-            progress_bar.progress(sub_prog)
-            status_text.markdown(f"⏳ Descargando banda **{b_name}** ({b_idx}/{b_total}) para `{item_id[:20]}`")
+        for tile_idx, item in enumerate(items):
+            status_text.markdown(f"📦 Fecha {date_idx+1}/{count_dates} | Tile {tile_idx+1}/{len(items)}: `{item.item_id[:20]}...`")
+            
+            # Callback para progreso interno de bandas
+            def _update_band_progress(b_idx, b_total, b_name):
+                nonlocal current_band_count
+                current_band_count += 1
+                progress_bar.progress(min(current_band_count / total_bands_overall, 1.0))
+                status_text.markdown(f"⏳ Descargando banda **{b_name}** para `{item.item_id[:20]}`")
 
-        results = download_item_bands(
-            item=item,
-            bands=DEFAULT_BANDS,
-            geom=mask_geom,
-            output_dir=output_dir,
-            date_str=dt,
-            progress_callback=_update_band_progress
-        )
-        
-        if results:
-            downloaded_files.extend(results)
-        else:
-            st.error(f"❌ No se pudo descargar ninguna banda para el item `{item_id}`. Verifique su conexión y permisos.")
+            results = download_item_bands(
+                item=item,
+                bands=DEFAULT_BANDS,
+                geom=mask_geom,
+                output_dir=output_dir,
+                date_str=date_str,
+                progress_callback=_update_band_progress
+            )
+            
+            if results:
+                downloaded_files.extend(results)
+            else:
+                st.error(f"❌ No se pudo descargar ninguna banda para el tile `{item.item_id}`.")
         
     progress_bar.progress(1.0)
     status_text.success(f"✅ **Descarga completada con éxito.**")
@@ -528,6 +584,8 @@ def _run_grid_processing(delete_originals: bool):
             overall_stats["saved"] += res["saved"]
             overall_stats["skipped"] += res["skipped"]
             status.update(label=f"✅ Fecha completada: {ddir.name}", state="complete")
+
+    st.session_state["grid_processed"] = True # Task 1.2
 
     st.divider()
     st.success(
@@ -574,6 +632,9 @@ def _run_super_res_process():
     status_text.success("✅ **Proceso de Super-Resolución completado.**")
     st.balloons()
     
+    # Reiniciar estado para permitir nuevo proceso (Task 3.2)
+    _reset_app_state()
+    
     # --- Galería de Comparación (Task 3.3) ---
     if last_processed:
         st.divider()
@@ -582,9 +643,9 @@ def _run_super_res_process():
         
         col_orig, col_sr = st.columns(2)
         with col_orig:
-            st.image(str(original_path), caption="Original (128x128)", use_container_width=True)
+            st.image(str(original_path), caption="Original (128x128)", width="stretch")
         with col_sr:
-            st.image(str(last_processed), caption="Super-Resolución (1024x1024)", use_container_width=True)
+            st.image(str(last_processed), caption="Super-Resolución (1024x1024)", width="stretch")
 
 
 # ---------------------------------------------------------------------------

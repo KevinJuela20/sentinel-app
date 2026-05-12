@@ -9,12 +9,13 @@ Responsabilidades:
 """
 
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Bandas que se descargan por defecto
-DEFAULT_BANDS = ["B02", "B03", "B04", "SCL", "visual"]
+DEFAULT_BANDS = ["B02", "B03", "B04", "SCL"]
 
 
 def get_output_dir(base_dir: str, year: int, month: int, day: int) -> Path:
@@ -50,7 +51,14 @@ def get_band_filename(item_id: str, band_name: str, date_str: str) -> str:
     """
     # Convertir date_str a formato compacto: YYYY-MM-DD -> YYYYMMDD
     date_compact = date_str.replace("-", "")
-    return f"{date_compact}_{band_name}.tif"
+    
+    # Extraer el tile ID (MGRS square) del item_id
+    tile_id = "TILE"
+    match = re.search(r"_T(\d{2})([A-Z]{3})_", item_id)
+    if match:
+        tile_id = match.group(2)
+        
+    return f"{date_compact}_{tile_id}_{band_name}.tif"
 
 
 def get_full_path(base_dir: str, year: int, month: int, day: int,
@@ -71,3 +79,32 @@ def get_full_path(base_dir: str, year: int, month: int, day: int,
     output_dir = get_output_dir(base_dir, year, month, day)
     filename = get_band_filename(item_id, band_name, date_str)
     return output_dir / filename
+
+
+def check_date_data_exists(base_dir: str, year: int, month: int, day: int, 
+                           items: list, bands: list, date_str: str) -> bool:
+    """
+    Verifica si todos los archivos .tif necesarios para una fecha ya existen.
+    
+    Args:
+        base_dir: Directorio raíz.
+        year, month, day: Componentes de la fecha.
+        items: Lista de STACItems para esa fecha.
+        bands: Lista de bandas requeridas (ej: DEFAULT_BANDS).
+        date_str: Fecha en formato YYYY-MM-DD.
+        
+    Returns:
+        True si todos los archivos existen, False en caso contrario.
+    """
+    output_dir = Path(base_dir) / str(year) / f"{month:02d}" / f"{day:02d}"
+    if not output_dir.exists():
+        return False
+        
+    for item in items:
+        for band in bands:
+            filename = get_band_filename(item.item_id, band, date_str)
+            if not (output_dir / filename).exists():
+                logger.debug("Falta archivo: %s", filename)
+                return False
+                
+    return True

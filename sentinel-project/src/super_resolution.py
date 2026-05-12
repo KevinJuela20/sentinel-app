@@ -11,6 +11,7 @@ Responsabilidades:
 
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 import cv2
@@ -19,46 +20,42 @@ logger = logging.getLogger(__name__)
 
 class SuperResEngine:
     def __init__(self, models_dir: Optional[str] = None):
+        # Verificar disponibilidad del módulo dnn_superres antes de continuar
+        if not hasattr(cv2, "dnn_superres"):
+            raise ImportError(
+                "El módulo 'cv2.dnn_superres' no está disponible. "
+                "Asegúrate de haber instalado 'opencv-contrib-python-headless==4.12.0.88'."
+            )
+            
         if models_dir is None:
             self.models_dir = Path(__file__).parent.parent / "models"
         else:
             self.models_dir = Path(models_dir)
-        self.sr_x4 = cv2.dnn_superres.DnnSuperResImpl_create()
-        self.sr_x2 = cv2.dnn_superres.DnnSuperResImpl_create()
-        self._models_loaded = False
+        self._models_found = False
+        self._verify_models()
 
-    def load_models(self) -> bool:
-        """Carga los archivos .pb de los modelos EDSR."""
+    def _verify_models(self) -> bool:
+        """Verifica que los archivos de modelo existan."""
         path_x4 = self.models_dir / "EDSR_x4.pb"
         path_x2 = self.models_dir / "EDSR_x2.pb"
-
-        if not path_x4.exists() or not path_x2.exists():
+        self._models_found = path_x4.exists() and path_x2.exists()
+        if not self._models_found:
             logger.error("No se encontraron los modelos EDSR en %s", self.models_dir)
-            return False
-
-        try:
-            # Configurar x4
-            self.sr_x4.readModel(str(path_x4))
-            self.sr_x4.setModel("edsr", 4)
-            
-            # Configurar x2
-            self.sr_x2.readModel(str(path_x2))
-            self.sr_x2.setModel("edsr", 2)
-            
-            self._models_loaded = True
-            logger.info("Modelos EDSR cargados correctamente.")
-            return True
-        except Exception as exc:
-            logger.error("Error al cargar modelos DNN: %s", exc)
-            return False
+        return self._models_found
 
     def upscale(self, image_path: str, output_path: str) -> bool:
         """
         Aplica el pipeline de escalado: 128 -> (x4) -> 512 -> (x2) -> 1024.
+        Siguiendo el patrón de estabilidad recomendado:
+        1. Carga x4, procesa.
+        2. Carga x2, procesa.
         """
-        if not self._models_loaded:
-            if not self.load_models():
+        if not self._models_found:
+            if not self._verify_models():
                 return False
+
+        path_x4 = str(self.models_dir / "EDSR_x4.pb")
+        path_x2 = str(self.models_dir / "EDSR_x2.pb")
 
         try:
             img = cv2.imread(image_path)
@@ -67,22 +64,50 @@ class SuperResEngine:
                 return False
 
             # 1. Asegurar tamaño base 128x128
-            if img.shape[0] != 128 or img.shape[1] != 128:
+            h, w = img.shape[:2]
+            if h != 128 or w != 128:
+                logger.debug("Redimensionando imagen base de %dx%d a 128x128", w, h)
                 img = cv2.resize(img, (128, 128), interpolation=cv2.INTER_CUBIC)
 
+            # Inicializar motor DNN (se recomienda recrear para asegurar limpieza de estado)
+            sr = cv2.dnn_superres.DnnSuperResImpl_create()
+
             # 2. Paso 1: EDSR x4 (128 -> 512)
-            result_512 = self.sr_x4.upsample(img)
+            logger.debug("Aplicando modelo EDSR x4...")
+            sr.readModel(path_x4)
+            sr.setModel("edsr", 4)
+            img_512 = sr.upsample(img)
             
+            # Validación intermedia
+            h512, w512 = img_512.shape[:2]
+            if h512 != 512 or w512 != 512:
+                logger.error("Fallo en escalado x4: dimensiones obtenidas %dx%d", w512, h512)
+                return False
+
             # 3. Paso 2: EDSR x2 (512 -> 1024)
-            result_1024 = self.sr_x2.upsample(result_512)
+            logger.debug("Aplicando modelo EDSR x2...")
+            sr.readModel(path_x2)
+            sr.setModel("edsr", 2)
+            result_1024 = sr.upsample(img_512)
             
+            # Validación final
+            h1024, w1024 = result_1024.shape[:2]
+            if h1024 != 1024 or w1024 != 1024:
+                logger.error("Fallo en escalado final x2: dimensiones obtenidas %dx%d", w1024, h1024)
+                # Forzar redimensionamiento si la diferencia es mínima por bordes, 
+                # pero los modelos EDSR deberían ser exactos.
+                result_1024 = cv2.resize(result_1024, (1024, 1024), interpolation=cv2.INTER_CUBIC)
+
             # 4. Guardar resultado
             cv2.imwrite(output_path, result_1024)
-            logger.info("Super-resolución completada: %s", output_path)
+            logger.info("Super-resolución completada exitosamente: %s (1024x1024)", Path(output_path).name)
             return True
 
+        except (AttributeError, ImportError) as att_err:
+            logger.error("Error de módulo/atributo en OpenCV: %s. Verifica la instalación de opencv-contrib.", att_err)
+            return False
         except Exception as exc:
-            logger.error("Fallo en el pipeline de super-resolución: %s", exc)
+            logger.error("Fallo inesperado en el pipeline de super-resolución: %s", exc)
             return False
 
 
@@ -98,8 +123,8 @@ def process_super_res_batch(crops_dir: Path, progress_callback=None) -> dict:
         Estadísticas del proceso.
     """
     engine = SuperResEngine()
-    if not engine.load_models():
-        return {"error": "Modelos no disponibles en sentinel-project/models/"}
+    if not engine._models_found:
+        return {"error": f"Modelos no encontrados en {engine.models_dir}"}
         
     pngs = list(crops_dir.glob("*.png"))
     if not pngs:
@@ -125,4 +150,12 @@ def process_super_res_batch(crops_dir: Path, progress_callback=None) -> dict:
         if progress_callback:
             progress_callback(idx + 1, len(pngs), png_path.name)
             
+    # Task 2.1: Limpiar carpeta de recortes si el proceso fue exitoso
+    if stats["errors"] == 0 and stats["processed"] > 0:
+        try:
+            logger.info("Limpiando carpeta de recortes: %s", crops_dir)
+            shutil.rmtree(crops_dir)
+        except Exception as e:
+            logger.warning("No se pudo eliminar la carpeta de recortes: %s", e)
+
     return stats

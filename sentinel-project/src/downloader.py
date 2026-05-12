@@ -9,6 +9,7 @@ Responsabilidades:
 """
 
 import logging
+import requests
 from typing import Optional
 
 import planetary_computer as pc
@@ -30,58 +31,33 @@ def sign_asset_url(url: str) -> str:
         raise
 
 
-def download_and_clip(asset_url: str, geom: dict, output_path: str) -> bool:
+def download_full_tile(asset_url: str, output_path: str) -> bool:
     """
-    Abre un asset remoto, aplica un recorte espacial y guarda el resultado localmente.
+    Descarga un asset completo (tile íntegro) desde una URL firmada.
+    Utiliza streaming para manejar archivos grandes sin saturar la RAM.
     
     Args:
         asset_url: URL del asset (debe estar firmada).
-        geom: Geometría GeoJSON para el recorte (EPSG:4326).
         output_path: Ruta de destino para el archivo .tif.
         
     Returns:
         True si tuvo éxito, False en caso contrario.
     """
     try:
-        with rasterio.open(asset_url) as src:
-            # 1. Transformar geometría al CRS del raster
-            # Sentinel-2 suele estar en UTM, el AOI en WGS84
-            target_geom = transform_geom(
-                src_crs="EPSG:4326",
-                dst_crs=src.crs,
-                geom=geom
-            )
-
-            # 2. Aplicar máscara (clip)
-            out_image, out_transform = mask(src, [target_geom], crop=True)
-            
-            # 3. Copiar metadatos del original y actualizar dimensiones/transformación
-            out_meta = src.meta.copy()
-            out_meta.update({
-                "driver": "GTiff",
-                "height": out_image.shape[1],
-                "width": out_image.shape[2],
-                "transform": out_transform,
-                "crs": src.crs
-            })
-            
-            # 4. Escribir archivo local
-            with rasterio.open(output_path, "w", **out_meta) as dest:
-                dest.write(out_image)
-                
-        logger.info("Archivo guardado y recortado en: %s", output_path)
+        logger.info("Iniciando descarga de tile completo: %s", output_path)
+        
+        with requests.get(asset_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(output_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        
+        logger.info("Descarga finalizada: %s", output_path)
         return True
 
-    except ValueError as val_err:
-        if "shapes do not overlap" in str(val_err).lower():
-            logger.warning("El AOI no se solapa con el tile: %s", asset_url)
-        else:
-            logger.error("Error de valor en recorte: %s", val_err)
-        return False
     except Exception as exc:
-        logger.error("Error crítico procesando asset %s: %s", asset_url, exc)
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.error("Error descargando asset %s: %s", asset_url, exc)
         return False
 
 
@@ -124,7 +100,8 @@ def download_item_bands(item, bands: list, geom: dict, output_dir: str,
                 continue
 
             signed_url = sign_asset_url(asset_url)
-            success = download_and_clip(signed_url, geom, output_path)
+            # Task 1.3: Ya no usamos geom para recorte durante descarga
+            success = download_full_tile(signed_url, output_path)
             if success:
                 downloaded.append(output_path)
         except Exception as exc:

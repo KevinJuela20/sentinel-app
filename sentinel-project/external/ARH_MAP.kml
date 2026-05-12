@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Contorno de la Cuadrícula</name>
+    <Style id="lineaRoja">
+      <LineStyle>
+        <color>ff0000ff</color>
+        <width>3</width>
+      </LineStyle>
+      <PolyStyle>
+        <fill>0</fill>
+      </PolyStyle>
+    </Style>
+    <Placemark>
+      <name>Límite Exterior</name>
+      <styleUrl>#lineaRoja</styleUrl>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              -79.38629637117364,-2.888182930431751,0
+              -79.05548648006878,-2.600546993360011,0
+              -78.98684668867801,-2.703818951613207,0
+              -79.34070363528235,-2.81920708339689,0
+              -79.38629637117364,-2.888182930431751,0
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>

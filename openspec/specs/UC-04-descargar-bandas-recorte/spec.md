@@ -1,24 +1,26 @@
 ## Purpose
 
 Obtener los archivos de datos (bandas y TIF) guardándolos localmente con nombres estandarizados y recortes precisos. El sistema firma las URLs de descarga, recorta el ráster a la cuadrícula GeoJSON y guarda los archivos en carpetas organizadas jerárquicamente.
-
 ## Requirements
-
 ### Requirement: Descarga Optimizada de Bandas Seleccionadas (RF-04)
-El sistema SHALL descargar las bandas B02, B03, B04 y SCL, además del producto True Color (.tif), realizando un recorte (clip) a los polígonos del archivo `Cuadrícula_ARH.geojson` antes de guardar en disco. Los archivos resultantes deben ser GeoTIFF con el CRS correcto.
+El sistema SHALL descargar las bandas B02, B03, B04 y SCL para **cada uno de los tiles** asociados a las fechas seleccionadas. Antes de iniciar la descarga, el sistema SHALL validar si los archivos ya existen localmente para evitar duplicidad. Los archivos resultantes deben ser GeoTIFF con el CRS correcto y almacenarse en la misma carpeta de fecha, diferenciados por el ID del tile.
 
-#### Scenario: Descarga exitosa con recorte
-- **WHEN** el usuario inicia el proceso de descarga tras confirmar la selección (UC-03)
-- **THEN** el sistema firma las URLs para los assets: B02, B03, B04, SCL y Visual mediante `planetary_computer.sign`
-- **AND** descarga las bandas y realiza el recorte (clip) usando los límites de `Cuadrícula_ARH.geojson`
+#### Scenario: Descarga eficiente de bandas espectrales
+- **WHEN** el usuario inicia el proceso de descarga para una fecha seleccionada
+- **AND** el sistema verifica que la carpeta `Data_Sentinel/[Año]/[Mes]/[Día]` NO contiene los archivos `.tif` correspondientes a las bandas requeridas
+- **THEN** el sistema SHALL identificar todos los items (tiles) asociados a esa fecha en la cola de descarga
+- **AND** para cada item, firma únicamente los assets esenciales: B02, B03, B04 y SCL
+- **AND** EXCLUYE explícitamente el asset `visual` de la lista de descarga para evitar redundancia
+- **AND** descarga el archivo `.tif` original completo sin aplicar ningún recorte (no-cropping) ni máscara espacial
+- **AND** guarda los archivos resultantes preservando las dimensiones originales del tile de Sentinel-2
 - **AND** crea la estructura de carpetas `Data_Sentinel/[Año]/[Mes]/[Día]`
-- **AND** guarda los archivos resultantes con la fecha de adquisición y el nombre de la banda (ej: `20250101_B02.tif`)
-- **AND** notifica al usuario que la descarga ha finalizado mediante una barra de progreso al 100%
+- **AND** guarda los archivos con la fecha de adquisición, el ID del tile y el nombre de la banda (ej: `20250101_MPS_B02.tif`)
 
-#### Scenario: Error durante la descarga de una banda
-- **WHEN** una URL firmada expira o falla la descarga de una banda específica
-- **THEN** el sistema reintenta la firma y descarga
-- **AND** si persiste el error, registra el fallo y continúa con las demás bandas
+#### Scenario: Omisión de descarga por datos existentes
+- **WHEN** el usuario inicia el proceso de descarga para una fecha seleccionada
+- **AND** el sistema verifica que la carpeta `Data_Sentinel/[Año]/[Mes]/[Día]` YA contiene los archivos `.tif` correspondientes a las bandas requeridas para todos los tiles seleccionados
+- **THEN** el sistema SHALL omitir la descarga para esa fecha específica
+- **AND** SHALL informar al usuario que los datos ya se encuentran disponibles localmente
 
 ### Requirement: Estructura de Almacenamiento Jerárquica (RF-07)
 El sistema SHALL organizar las descargas en la estructura `Data_Sentinel/[Año]/[Mes]/[Día]/` garantizando que los nombres de carpetas tengan ceros a la izquierda para meses y días (ej: `01` para Enero).
@@ -26,20 +28,21 @@ El sistema SHALL organizar las descargas en la estructura `Data_Sentinel/[Año]/
 #### Scenario: Creación automática de estructura de carpetas
 - **WHEN** se guardan archivos para una fecha nueva
 - **THEN** el sistema crea automáticamente la jerarquía `Data_Sentinel/[Año]/[Mes]/[Día]/` en el directorio raíz del proyecto o ruta configurada
-- **AND** almacena los archivos recortados en dicha carpeta
+- **AND** almacena los archivos completos en dicha carpeta
 
 ## Acceptance Criteria
-- Las bandas B02, B03, B04, SCL y Visual se descargan correctamente
-- El recorte a `Cuadrícula_ARH.geojson` se aplica antes de guardar
+- Las bandas B02, B03, B04 y SCL se descargan en su totalidad (100km x 100km)
+- El asset `visual` ya no aparece en la carpeta de descarga ni en el log de archivos guardados
+- Se elimina el paso de recorte (cropping) durante la fase de descarga física
+- Los archivos resultantes mantienen la resolución y cobertura original del tile STAC
 - La estructura de carpetas sigue el patrón `[Año]/[Mes]/[Día]`
-- Los archivos se nombran con la fecha de adquisición
 - El usuario recibe notificación al completar la descarga
 - Se gestionan errores de descarga sin detener el proceso completo
 
 ## Stories
 - [ ] Story 1: Implementar firma de URLs con `planetary_computer.sign` para los assets
-- [ ] Story 2: Descargar bandas B02, B03, B04, SCL y Visual
-- [ ] Story 3: Implementar recorte (clip) de ráster con `rasterio` y geometría GeoJSON
+- [ ] Story 2: Descargar bandas B02, B03, B04 y SCL completas (full tile) excluyendo visual
+- [ ] Story 3: Implementar descarga directa por bloques (stream download) con `requests`
 - [ ] Story 4: Crear la estructura de carpetas jerárquica `Data_Sentinel/[Año]/[Mes]/[Día]`
 - [ ] Story 5: Nombrar archivos con fecha de adquisición
 - [ ] Story 6: Implementar barra de progreso y notificación de finalización

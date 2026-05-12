@@ -5,24 +5,45 @@ Generar recortes limpios y organizados para alimentar los modelos de IA. El sist
 ## Requirements
 
 ### Requirement: Preprocesamiento de Recortes y Filtrado de Nubes (RF-05)
-El sistema SHALL verificar la capa SCL por cada polígono en `Cuadrícula_ARH.geojson`. Si los píxeles indican presencia de nubes (códigos 1, 2, 3, 8, 9, 10) superando el umbral del 5% del área del recorte, el sistema debe descartar el recorte. Si está limpio, se guarda como .png con el formato `[id_poligono]_[fecha].png`.
+El sistema SHALL verificar la capa SCL por cada polígono en `Cuadrícula_ARH.geojson`. El sistema SHALL descartar cualquier recorte cuya máscara tenga dimensiones menores a **124x124 píxeles** (recortes de borde de tile). Si el recorte supera la validación de tamaño y el umbral de nubes (5%), el sistema SHALL redimensionarlo a exactamente **128x128 píxeles** antes de guardarlo como .png. El formato de nombre SHALL ser `[id_poligono]_[fecha]_[id_tile].png` para evitar colisiones entre tiles.
 
-#### Scenario: Recorte limpio guardado exitosamente
-- **WHEN** el sistema analiza la capa SCL de un polígono
-- **AND** la proporción de píxeles con códigos de nubes (1, 2, 3, 8, 9, 10) es igual o menor al 5%
-- **THEN** genera una imagen combinada RGB (PNG) de 8 bits a partir de las bandas B04, B03, B02
-- **AND** guarda el archivo como `[id_poligono]_[fecha].png` en la subcarpeta `crops/` dentro de la carpeta del día
+#### Scenario: Recorte válido guardado con redimensionamiento
+- **WHEN** el sistema analiza un polígono y su intersección con un tile
+- **AND** las dimensiones del recorte resultante son mayores o iguales a 124x124 píxeles
+- **AND** la proporción de píxeles nublados es igual o menor al 5%
+- **THEN** el sistema redimensiona el recorte a exactamente 128x128 píxeles usando interpolación cúbica
+- **AND** genera la imagen combinada RGB (PNG)
+- **AND** guarda el archivo como `[id_poligono]_[fecha]_[id_tile].png` en la subcarpeta `crops/`
 
-#### Scenario: Recorte con nubes descartado
-- **WHEN** el sistema analiza la capa SCL de un polígono
-- **AND** detecta que la proporción de píxeles con códigos de nubes (1, 2, 3, 8, 9, 10) es mayor al 5%
-- **THEN** omite la generación del PNG para ese polígono
-- **AND** registra el evento en los logs indicando el ID del polígono y el porcentaje de nubosidad detectado
+#### Scenario: Recorte descartado por dimensiones insuficientes
+- **WHEN** el sistema realiza el recorte de un polígono en los límites de un tile
+- **AND** detecta que el ancho o el alto es menor a 124 píxeles
+- **THEN** el sistema omite el procesamiento de ese recorte sin guardarlo
+- **AND** continúa con el siguiente polígono/tile
+
+#### Scenario: Procesamiento de múltiples tiles por fecha
+- **WHEN** existen archivos de múltiples tiles (ej: MPS, MQT, MQS) para- **AND** al guardar el resultado en PNG, el sistema SHALL aplicar un escalado de contraste mediante percentiles (2% al 98%) para normalizar la visualización
+
+#### Scenario: Generación de mosaico RGB consolidado del área de estudio
+- **WHEN** finaliza el procesamiento de los recortes de la cuadrícula
+- **THEN** el sistema SHALL cargar la geometría del archivo `ARH_ETAPA.kml`
+- **AND** para cada uno de los tres tiles descargados (MPS, MQT, MQS), SHALL generar un producto RGB (B04, B03, B02) recortado por dicha geometría
+- **AND** el sistema SHALL unir (merge) los resultados de los tres tiles en un único archivo GeoTIFF de 3 bandas
+- **AND** el archivo resultante SHALL guardarse con el nombre `Color_YYYY-MM-DD.tif` en la carpeta de la fecha
+- **AND** el sistema SHALL eliminar las bandas individuales descargadas únicamente si la generación del mosaico y los recortes fue exitosa
+ula completa contra cada tile, guardando los recortes válidos diferenciados por su ID de tile en el nombre de archivo
+
+#### Scenario: Generación de mosaico RGB de la zona de estudio
+- **WHEN** el procesamiento de recortes para una fecha específica ha finalizado
+- **AND** antes de eliminar los archivos temporales
+- **THEN** el sistema SHALL identificar todos los archivos `*_visual.tif` de los tiles descargados
+- **AND** realizar una unión (mosaico) de estos archivos para cubrir la zona de estudio completa
+- **AND** guardar el resultado como `Color_YYYY-MM-DD.tif` en la raíz del directorio de la fecha
 
 #### Scenario: Limpieza de archivos temporales
-- **WHEN** el procesamiento de todos los polígonos de la cuadrícula para una fecha específica ha finalizado
-- **THEN** el sistema SHALL eliminar los archivos `.tif` originales de esa fecha para optimizar espacio
-- **AND** solo conserva los recortes PNG generados
+- **WHEN** el mosaico RGB ha sido generado con éxito
+- **AND** los recortes PNG han sido guardados
+- **THEN** el sistema SHALL eliminar los archivos `.tif` originales (excepto el mosaico `Color_*.tif`) para optimizar espacio
 
 ### Requirement: Estructura de Almacenamiento para Recortes (RF-07)
 El sistema SHALL almacenar los recortes limpios en subcarpetas `crops/` dentro de la estructura jerárquica `Data_Sentinel/[Año]/[Mes]/[Día]/`.
@@ -32,23 +53,24 @@ El sistema SHALL almacenar los recortes limpios en subcarpetas `crops/` dentro d
 - **THEN** se almacenan en una subcarpeta dedicada `crops/` dentro de `[Año]/[Mes]/[Día]/`
 
 ## Acceptance Criteria
-- Los polígonos de la cuadrícula se procesan correctamente
-- Los recortes con nubes se descartan con registro en log
-- Los recortes limpios se guardan como PNG con nombre `[id]_[fecha]`
-- Los archivos temporales se eliminan tras el procesamiento
-- Los recortes se organizan en subcarpetas por fecha
+- Todos los recortes RGB de una misma fecha/tile tienen dimensiones idénticas y alineación perfecta
+- La validación de nubes se realiza antes de la extracción de las bandas de 10m para optimizar recursos
+- Los recortes con dimensiones menores a 63px son descartados automáticamente
+- Las imágenes PNG resultantes presentan un contraste mejorado y consistente gracias a la normalización por percentiles
+- Se registra en los logs el descarte de celdas por nubes o por tamaño insuficiente
 
 ## Stories
-- [ ] Story 1: Implementar escaneo de la carpeta `Data_Sentinel` para encontrar datos descargados
-- [ ] Story 2: Cargar y iterar sobre polígonos de `Cuadrícula_ARH.geojson`
-- [ ] Story 3: Implementar recorte (crop) de bandas B02, B03, B04 y SCL por polígono
-- [ ] Story 4: Implementar filtro de nubes basado en capa SCL (códigos 1,2,3,8,9,10)
-- [ ] Story 5: Generar imagen RGB combinada (PNG) para recortes limpios
-- [ ] Story 6: Implementar limpieza de archivos temporales .tif
-- [ ] Story 7: Agregar logging de polígonos omitidos por nubosidad
+- [ ] Story 1: Implementar validación de nubes en resolución nativa SCL (20m)
+- [ ] Story 2: Configurar B04 como referencia espacial para la definición de ventanas de recorte
+- [ ] Story 3: Extraer bandas RGB (10m) alineadas a la ventana de referencia
+- [ ] Story 4: Implementar descarte automático de recortes incompletos (<63px)
+- [ ] Story 5: Implementar normalización de contraste 2%-98% en la generación de PNG
+- [ ] Story 6: Guardar recortes en la subcarpeta `crops/` de cada fecha
+- [ ] Story 7: Generar mosaico RGB consolidado del área de estudio usando `ARH_ETAPA.kml`
 
 ## Technical Notes
 - Components: Motor de Procesamiento, Gestor del Sistema de Archivos
+- Dependencies: Rasterio, Geopandas, Fiona (KML support)
 - Dependencies: UC-04 (requiere datos descargados de Fase 1)
 - Algoritmo: `filter_clouds(raster_scl)` — umbral de 5% de píxeles nublados
 - Códigos SCL a filtrar: 1 (Saturado), 2 (Sombra oscura), 3 (Sombra nube), 8 (Nube media), 9 (Nube alta), 10 (Cirrus)

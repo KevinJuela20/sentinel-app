@@ -33,66 +33,39 @@ class TestPreviewEngine:
         result = download_image("https://example.com/image.jpg")
         assert result is None
 
-    def test_apply_aoi_mask_without_rasterio(self):
-        """Si rasterio no está disponible, debe retornar la imagen original convertida a RGBA."""
-        # Forzar que rasterio parezca no estar disponible
-        with patch("src.preview_engine.rasterio", None):
-            # Crear una imagen PIL pequeña en bytes
-            img = Image.new("RGB", (10, 10), color="red")
-            img_byte_arr = io.BytesIO()
-            img.save(img_byte_arr, format='PNG')
-            img_bytes = img_byte_arr.getvalue()
-            
-            result = apply_aoi_mask(img_bytes, {"type": "Point", "coordinates": [0,0]})
-            assert result.mode == "RGBA"
-            assert result.size == (10, 10)
-
-    def test_apply_aoi_mask_with_rasterio_mock(self):
-        """Verifica que se llame a la lógica de masking de rasterio usando inyección de sys.modules."""
-        import sys
-        from unittest.mock import MagicMock, patch
+    def test_apply_aoi_mask_draws_boundary_with_bbox(self):
+        """Verifica que se dibujen píxeles rojos usando mapeo lineal por bbox."""
+        # Crear una imagen PIL 100x100
+        img = Image.new("RGB", (100, 100), color="black")
+        img_bytes = io.BytesIO()
+        img.save(img_bytes, format='PNG')
         
-        # Mocks para rasterio
-        mock_rasterio = MagicMock()
-        mock_mask_mod = MagicMock()
-        mock_memfile_mod = MagicMock()
-        
-        fake_out_image = np.zeros((3, 5, 5), dtype=np.uint8)
-        mock_mask_mod.mask.return_value = (fake_out_image, MagicMock())
-        
-        modules = {
-            "rasterio": mock_rasterio,
-            "rasterio.mask": mock_mask_mod,
-            "rasterio.memoryfile": mock_memfile_mod
+        aoi_geom = {
+            "type": "Polygon",
+            "coordinates": [[[10, 10], [90, 10], [90, 90], [10, 90], [10, 10]]]
         }
+        # Bbox que cubre el área (0,0) a (100,100)
+        bbox = [0, 0, 100, 100]
         
-        with patch.dict(sys.modules, modules):
-            # Re-parchear los nombres que se importaron dentro del módulo
-            # Usar create=True porque estos nombres pueden no existir si rasterio no está instalado
-            with patch("src.preview_engine.rasterio", mock_rasterio, create=True), \
-                 patch("src.preview_engine.mask", mock_mask_mod.mask, create=True), \
-                 patch("src.preview_engine.MemoryFile", mock_memfile_mod.MemoryFile, create=True):
-                
-                img = Image.new("RGB", (10, 10))
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format='PNG')
-                
-                # Ejecutar
-                result = apply_aoi_mask(img_bytes.getvalue(), {"type": "Polygon", "coordinates": []})
-                
-                assert mock_mask_mod.mask.called
-                assert isinstance(result, Image.Image)
-                assert result.mode == "RGBA"
+        # Ejecutar
+        result = apply_aoi_mask(img_bytes.getvalue(), aoi_geom, bbox)
+        
+        # Convertir a numpy para buscar el color rojo (255, 0, 0)
+        data = np.array(result)
+        has_red = np.any((data[:, :, 0] == 255) & (data[:, :, 1] == 0) & (data[:, :, 2] == 0))
+        assert has_red, "No se encontró el contorno rojo en la imagen resultante"
+        assert result.size == (100, 100)
 
     @patch("src.preview_engine.download_image")
     @patch("src.preview_engine.apply_aoi_mask")
     def test_get_masked_preview_orchestration(self, mock_apply, mock_download):
-        """Verifica que el orquestador llame a descarga y máscara."""
+        """Verifica que el orquestador llame a descarga y procesamiento con bbox."""
         mock_download.return_value = b"bytes"
         mock_apply.return_value = MagicMock(spec=Image.Image)
+        bbox = [0, 0, 1, 1]
         
-        result = get_masked_preview("http://url", {})
+        result = get_masked_preview("http://url", {}, bbox)
         
         mock_download.assert_called_with("http://url")
-        mock_apply.assert_called_with(b"bytes", {})
+        mock_apply.assert_called_with(b"bytes", {}, bbox)
         assert result is not None

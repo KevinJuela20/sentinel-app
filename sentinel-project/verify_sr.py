@@ -10,18 +10,21 @@ from pathlib import Path
 import cv2
 
 # Agregar src al path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
+sys.path.append(str(Path(__file__).parent / "src"))
 
 from super_resolution import SuperResEngine
 
 def verify():
     base_dir = Path(__file__).parent
-    sample_input = base_dir / "Data_Sentinel/2025/08/08/crops/1051_20250808.png"
-    sample_output = base_dir / "Data_Sentinel/2025/08/08/super_res/1051_20250808_SR.png"
     
-    if not sample_input.exists():
-        print(f"❌ No se encontró la imagen de prueba: {sample_input}")
+    # Buscar cualquier PNG en crops para probar
+    crops = list(base_dir.rglob("crops/*.png"))
+    if not crops:
+        print(f"❌ No se encontraron imágenes en {base_dir}/Data_Sentinel/.../crops/")
         return
+    
+    sample_input = crops[0]
+    sample_output = sample_input.parent.parent / "super_res" / (sample_input.stem + "_SR.png")
 
     print(f"🚀 Iniciando super-resolución para: {sample_input.name}")
     

@@ -13,6 +13,8 @@ from src.search_controller import (
     STACItem,
     SearchResult,
     _classify_error,
+    _extract_tile_id,
+    _filter_by_tile,
     _parse_item,
     format_date_range,
     search_images,
@@ -141,27 +143,41 @@ class TestSearchImages:
         mock_pystac = MagicMock()
         return mock_pystac, mock_pc
 
-    def test_returns_items_on_success(self):
-        """Debe retornar SearchResult con items cuando la búsqueda funciona."""
+    def test_search_images_filters_tiles(self):
+        """Debe filtrar los items devueltos por la API STAC según ALLOWED_TILES."""
         import sys
         mock_pystac, mock_pc = self._make_mock_modules()
 
-        mock_item = MagicMock()
-        mock_item.id = "S2A_001"
-        mock_item.datetime = date(2026, 1, 15)
-        mock_item.properties = {"eo:cloud_cover": 5.0}
-        mock_item.assets = {}
+        # Mock de 4 items, uno de ellos es MPT (no permitido por defecto)
+        ids = [
+            "S2A_MSIL2A_20250115T151619_R125_T17MPS_20250115T190440", # OK
+            "S2A_MSIL2A_20250115T151619_R125_T17MQT_20250115T190440", # OK
+            "S2A_MSIL2A_20250115T151619_R125_T17MQS_20250115T190440", # OK
+            "S2A_MSIL2A_20250115T151619_R125_T17MPT_20250115T190440", # FILTERED
+        ]
+        
+        mock_items = []
+        for i_id in ids:
+            m = MagicMock()
+            m.id = i_id
+            m.datetime = date(2025, 1, 15)
+            m.properties = {"eo:cloud_cover": 0.0}
+            m.assets = {}
+            mock_items.append(m)
 
         mock_search = MagicMock()
-        mock_search.item_collection.return_value = [mock_item]
+        mock_search.item_collection.return_value = mock_items
         mock_pystac.Client.open.return_value.search.return_value = mock_search
 
         with patch.dict(sys.modules, {"pystac_client": mock_pystac, "planetary_computer": mock_pc}):
-            result = search_images(1, 2026, 1, 2026, self.DUMMY_AOI)
+            result = search_images(1, 2025, 1, 2025, self.DUMMY_AOI)
 
         assert result.success
-        assert result.total == 1
-        assert result.items[0].item_id == "S2A_001"
+        assert result.total == 3
+        # Verificar que MPT no está en los resultados
+        item_ids = [it.item_id for it in result.items]
+        assert any("MPS" in i for i in item_ids)
+        assert not any("MPT" in i for i in item_ids)
 
     def test_returns_empty_result_when_no_images(self):
         """Debe retornar SearchResult con 0 items cuando no hay resultados."""
@@ -234,3 +250,48 @@ class TestSearchResult:
     def test_has_results_false_when_empty(self):
         r = SearchResult(items=[], total=0)
         assert r.has_results is False
+
+
+# ---------------------------------------------------------------------------
+# Tile Filtering (Task 3.1 + 3.2)
+# ---------------------------------------------------------------------------
+
+class TestExtractTileId:
+    def test_extracts_mgrs_tile(self):
+        """Debe extraer los 3 caracteres MGRS de un ID estándar."""
+        item_id = "S2B_MSIL2A_20250115T151619_R125_T17MPS_20250115T190440"
+        assert _extract_tile_id(item_id) == "MPS"
+        
+        item_id2 = "S2A_MSIL2A_20250115T151619_R125_T17MQT_20250115T190440"
+        assert _extract_tile_id(item_id2) == "MQT"
+
+    def test_returns_none_on_invalid_format(self):
+        """Debe retornar None si el ID no tiene el formato de tile esperado."""
+        assert _extract_tile_id("S2A_INVALID_ID") is None
+        assert _extract_tile_id("S2B_T17MPS") is None  # Sin guiones bajos rodeando
+        assert _extract_tile_id("S2B_MSIL2A_T17_MQS") is None
+
+
+class TestFilterByTile:
+    def test_filters_unwanted_tiles(self):
+        """Debe filtrar los tiles que no están en la lista permitida."""
+        items = [
+            STACItem(item_id="..._T17MPS_...", datetime="", cloud_cover=0),
+            STACItem(item_id="..._T17MPT_...", datetime="", cloud_cover=0),
+            STACItem(item_id="..._T17MQT_...", datetime="", cloud_cover=0),
+        ]
+        allowed = ["MPS", "MQT"]
+        
+        filtered = _filter_by_tile(items, allowed)
+        assert len(filtered) == 2
+        assert filtered[0].item_id == "..._T17MPS_..."
+        assert filtered[1].item_id == "..._T17MQT_..."
+
+    def test_keeps_items_with_unparseable_id(self):
+        """Debe conservar items si no puede extraer el tile ID (por precaución)."""
+        items = [
+            STACItem(item_id="INVALID_FORMAT", datetime="", cloud_cover=0),
+        ]
+        filtered = _filter_by_tile(items, ["MPS"])
+        assert len(filtered) == 1
+        assert filtered[0].item_id == "INVALID_FORMAT"

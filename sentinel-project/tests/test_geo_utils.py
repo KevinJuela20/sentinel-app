@@ -17,7 +17,7 @@ from src.geo_utils import load_aoi, load_geojson
 # Fixtures
 # ---------------------------------------------------------------------------
 
-KML_PATH = str(Path(__file__).parent.parent / "external" / "ARH_ETAPA.kml")
+KML_PATH = str(Path(__file__).parent.parent / "external" / "ARH_MAP.kml")
 GEOJSON_PATH = str(Path(__file__).parent.parent / "external" / "cuadricula_arh.geojson")
 
 

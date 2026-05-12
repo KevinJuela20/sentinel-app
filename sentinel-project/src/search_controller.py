@@ -12,6 +12,7 @@ Responsabilidades:
 
 import calendar
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 MPC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 SENTINEL_COLLECTION = "sentinel-2-l2a"
+ALLOWED_TILES = ["MPS", "MQT", "MQS"]
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +37,7 @@ class STACItem:
     item_id: str
     datetime: str          # ISO 8601 (e.g. "2026-01-15T10:23:00Z")
     cloud_cover: float     # eo:cloud_cover (0–100)
+    bbox: list[float] = field(default_factory=list)  # [minx, miny, maxx, maxy]
     assets: dict = field(default_factory=dict)  # nombre → href
 
 
@@ -139,8 +142,60 @@ def _parse_item(item) -> STACItem:
         item_id=item.id,
         datetime=datetime_str,
         cloud_cover=cloud_cover,
+        bbox=item.bbox,
         assets=assets,
     )
+
+
+
+# ---------------------------------------------------------------------------
+# Tile Filtering (Task 2.1 + 2.2)
+# ---------------------------------------------------------------------------
+
+
+def _extract_tile_id(item_id: str) -> Optional[str]:
+    """
+    Extrae el código MGRS (los últimos 3 caracteres) del item_id de Sentinel-2.
+    
+    Formato esperado: ..._T17MPS_... -> retorna "MPS"
+    """
+    # Patrón: _T seguido de 2 dígitos (zona UTM) y 3 letras (MGRS square)
+    match = re.search(r"_T(\d{2})([A-Z]{3})_", item_id)
+    if match:
+        return match.group(2)
+    return None
+
+
+def _filter_by_tile(items: list[STACItem], allowed: list[str]) -> list[STACItem]:
+    """
+    Filtra una lista de STACItems conservando solo los tiles permitidos.
+    """
+    filtered = []
+    for item in items:
+        tile_id = _extract_tile_id(item.item_id)
+        if tile_id is None:
+            logger.warning("No se pudo extraer el tile ID de: %s. Se conserva por precaución.", item.item_id)
+            filtered.append(item)
+        elif tile_id in allowed:
+            filtered.append(item)
+        else:
+            logger.info("Filtrando tile no deseado: %s (ID: %s)", tile_id, item.item_id)
+    
+    return filtered
+
+
+def group_by_date(items: list[STACItem]) -> dict[str, list[STACItem]]:
+    """
+    Agrupa una lista de STACItems por su fecha (YYYY-MM-DD).
+    """
+    grouped = {}
+    for item in items:
+        # Extraer fecha YYYY-MM-DD del string ISO 8601
+        date_str = item.datetime[:10]
+        if date_str not in grouped:
+            grouped[date_str] = []
+        grouped[date_str].append(item)
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +248,16 @@ def search_images(
         item_collection = search.item_collection()
         items = [_parse_item(item) for item in item_collection]
 
-        logger.info("Búsqueda completada: %d imagen(es) encontrada(s)", len(items))
-        return SearchResult(items=items, total=len(items))
+        # Filtrar por tiles permitidos (Task 2.3)
+        total_raw = len(items)
+        items = _filter_by_tile(items, ALLOWED_TILES)
+        total_filtered = len(items)
+
+        logger.info(
+            "Búsqueda completada: %d imagen(es) encontradas (filtradas %d de %d)", 
+            total_filtered, total_filtered, total_raw
+        )
+        return SearchResult(items=items, total=total_filtered)
 
     except Exception as exc:  # noqa: BLE001
         error_msg = _classify_error(exc)

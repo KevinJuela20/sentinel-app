@@ -28,7 +28,7 @@ def load_aoi(kml_path: str) -> Optional[dict]:
     como un objeto GeoJSON (dict).
 
     Args:
-        kml_path: Ruta al archivo KML (e.g. "external/ARH_ETAPA.kml").
+        kml_path: Ruta al archivo KML (e.g. "external/ARH_MAP.kml").
 
     Returns:
         Diccionario GeoJSON con la geometría unida de todas las features,
@@ -70,6 +70,34 @@ def load_aoi(kml_path: str) -> Optional[dict]:
     except Exception as exc:
         logger.error("Error al parsear el archivo KML '%s': %s", kml_path, exc)
         raise
+
+
+def load_kml_geometry(kml_path: str):
+    """
+    Carga un archivo KML y retorna la geometría unificada de todas las features
+    como un objeto de Shapely.
+
+    Args:
+        kml_path: Ruta al archivo KML.
+
+    Returns:
+        Objeto de Shapely (Polygon o MultiPolygon).
+    """
+    path = Path(kml_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Archivo KML no encontrado: {kml_path}")
+
+    import geopandas as gpd
+    import fiona
+
+    fiona.drvsupport.supported_drivers["KML"] = "rw"
+    fiona.drvsupport.supported_drivers["LIBKML"] = "rw"
+
+    gdf = gpd.read_file(kml_path, driver="KML")
+    if gdf.empty:
+        raise ValueError(f"El archivo KML no contiene geometrías: {kml_path}")
+
+    return gdf.geometry.union_all()
 
 
 def load_geojson(geojson_path: str):

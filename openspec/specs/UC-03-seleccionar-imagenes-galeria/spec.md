@@ -1,26 +1,22 @@
 ## Purpose
 
 Marcar las imágenes que el usuario considera aptas para procesos posteriores de descarga y análisis. El analista revisa los metadatos y la previsualización visual para marcar una o más imágenes como "seleccionadas".
-
 ## Requirements
-
 ### Requirement: Galería de Selección con Metadatos (RF-03)
-El sistema SHALL mostrar los resultados en una cuadrícula cronológica con el porcentaje de `eo:cloud_cover` y fecha exacta, permitiendo selección múltiple mediante checkboxes.
+El sistema SHALL mostrar los resultados agrupados por **Fecha de Adquisición**. Cada entrada en la galería representará un día único. El sistema SHALL permitir la selección de una fecha completa mediante un único checkbox. Al seleccionar una fecha, el sistema SHALL incluir automáticamente todos los tiles disponibles para ese día (MPS, MQT, MQS) en la cola de descarga. **Para garantizar la estabilidad de la interfaz y la integridad de los datos procesados, el sistema SHALL mostrar únicamente las fechas que cuenten con exactamente 3 tiles.**
 
-#### Scenario: Selección exitosa de múltiples imágenes
-- **WHEN** el usuario revisa la galería con previsualizaciones y metadatos
-- **AND** marca los checkboxes de las imágenes consideradas "limpias"
+#### Scenario: Selección exitosa de una fecha completa
+- **WHEN** el usuario revisa la galería con previsualizaciones agrupadas por fecha
+- **AND** el sistema filtra y muestra solo las fechas con exactamente 3 tiles
+- **AND** marca el checkbox de una fecha específica
 - **AND** presiona el botón de confirmación de selección
-- **THEN** el sistema registra los IDs de items y enlaces de assets en la cola de descarga
+- **THEN** el sistema registra todos los items STAC (exactamente 3 tiles) correspondientes a esa fecha en la cola de descarga
 - **AND** habilita las opciones de descarga
 
-#### Scenario: Selección de imágenes de múltiples meses
-- **WHEN** el usuario repite el proceso de selección para diferentes períodos temporales
-- **THEN** el sistema acumula todas las imágenes seleccionadas en la misma cola de descarga
-
-#### Scenario: Ninguna imagen seleccionada
-- **WHEN** el usuario presiona confirmar sin haber seleccionado ninguna imagen
-- **THEN** el sistema muestra un mensaje indicando que debe seleccionar al menos una imagen
+#### Scenario: Omisión de fechas incompletas o excedentes
+- **WHEN** el resultado de la búsqueda STAC devuelve una fecha con menos de 3 tiles o más de 3 tiles
+- **THEN** el sistema SHALL omitir dicha fecha de la galería de visualización
+- **AND** NO permitirá su selección para procesos posteriores
 
 ## Acceptance Criteria
 - Los resultados se muestran en cuadrícula cronológica

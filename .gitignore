@@ -1,0 +1,12 @@
+# Entornos virtuales
+env/
+venv/
+.env/
+
+# Caché de Python y herramientas
+__pycache__/
+.pytest_cache/
+
+# Datos e imágenes pesadas
+sentinel-project/Data_Sentinel/
+sentinel-project/models/
