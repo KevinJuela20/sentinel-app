@@ -1,8 +1,5 @@
-# aoi-overlay Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change overlay-aoi-boundary. Update Purpose after archive.
-## Requirements
 ### Requirement: Superposición Vectorial del AOI (RF-OVERLAY-01)
 El sistema SHALL dibujar el contorno **completo** del AOI sobre las imágenes de previsualización, independientemente de si el tile cubre la totalidad del área.
 
@@ -31,6 +28,8 @@ El sistema SHALL dibujar el contorno **completo** del AOI sobre las imágenes de
 - **WHEN** el sistema procesa la geometría para la superposición
 - **THEN** SHALL usar únicamente las componentes `lon,lat` (descartar altitud)
 
+## ADDED Requirements
+
 ### Requirement: Fuente de datos KML correcta (RF-OVERLAY-02)
 El sistema SHALL cargar la geometría del AOI desde el archivo `ARH_ETAPA.kml` que contiene el polígono detallado de la zona de estudio (cuenca MACHANGARA).
 
@@ -45,4 +44,3 @@ El sistema SHALL cargar la geometría del AOI desde el archivo `ARH_ETAPA.kml` q
 - **WHEN** el sistema intenta cargar el AOI
 - **THEN** SHALL mostrar un mensaje de error indicando la ruta esperada
 - **AND** SHALL permitir al usuario continuar sin AOI superpuesto
-
