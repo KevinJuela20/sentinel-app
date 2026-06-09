@@ -20,7 +20,7 @@ from src.geo_utils import load_aoi
 from src.search_controller import SearchResult, STACItem, search_images, validate_date_range, group_by_date
 from src.preview_engine import get_masked_preview
 from src.downloader import download_item_bands
-from src.file_manager import get_output_dir, DEFAULT_BANDS, check_date_data_exists
+from src.file_manager import get_output_dir, DEFAULT_BANDS, check_date_data_exists, get_data_root
 from src.processor import process_all_grids
 from src.super_resolution import process_super_res_batch
 
@@ -377,7 +377,7 @@ def _render_date_section(date_str: str, items: list[STACItem]):
 
 def _check_if_crops_exist():
     """Verifica si existen recortes en disco para habilitar SR (Task 2.1)."""
-    sentinel_data_path = Path(__file__).parent / "Data_Sentinel"
+    sentinel_data_path = get_data_root()
     if sentinel_data_path.exists():
         has_crops = any(sentinel_data_path.rglob("crops/*.png"))
         if has_crops:
@@ -448,7 +448,7 @@ def _render_selection_summary():
 
     # --- Procesamiento de Cuadrícula (UC-05: Tasks 3.1 + 3.2 + 3.3) ---
     # Solo si hay archivos en Data_Sentinel
-    sentinel_data_path = Path(__file__).parent / "Data_Sentinel"
+    sentinel_data_path = get_data_root()
     if sentinel_data_path.exists() and any(sentinel_data_path.rglob("*.tif")):
         st.divider()
         st.subheader("🤖 Preparación para IA (Recortes y Filtrado)")
@@ -495,7 +495,7 @@ def _run_download_process(queue: dict):
     status_text = st.empty()
     
     # Directorio base de descarga
-    base_dir = Path(__file__).parent / "Data_Sentinel"
+    base_dir = get_data_root()
     downloaded_files = []
     
     # AOI detallado para el recorte
@@ -559,7 +559,7 @@ def _run_grid_processing(delete_originals: bool):
         st.error(f"❌ No se encontró la cuadrícula en: `{grid_path}`")
         return
 
-    base_dir = Path(__file__).parent / "Data_Sentinel"
+    base_dir = get_data_root()
     # Buscar carpetas de días (YYYY/MM/DD)
     date_dirs = [d for d in base_dir.rglob("*") if d.is_dir() and any(d.glob("*.tif"))]
     
@@ -600,7 +600,7 @@ def _run_grid_processing(delete_originals: bool):
 
 def _run_super_res_process():
     """Ejecuta el escalado IA con feedback visual."""
-    base_dir = Path(__file__).parent / "Data_Sentinel"
+    base_dir = get_data_root()
     crops_dirs = [d for d in base_dir.rglob("crops") if d.is_dir() and any(d.glob("*.png"))]
     
     if not crops_dirs:

@@ -7,27 +7,27 @@ El sistema SHALL descargar las bandas B02, B03, B04 y SCL para **cada uno de los
 
 #### Scenario: Descarga eficiente de bandas espectrales
 - **WHEN** el usuario inicia el proceso de descarga para una fecha seleccionada
-- **AND** el sistema verifica que la carpeta `Data_Sentinel/[Año]/[Mes]/[Día]` NO contiene los archivos `.tif` correspondientes a las bandas requeridas
+- **AND** el sistema verifica que la carpeta `~/Documents/Data_Sentinel/[Año]/[Mes]/[Día]` NO contiene los archivos `.tif` correspondientes a las bandas requeridas
 - **THEN** el sistema SHALL identificar todos los items (tiles) asociados a esa fecha en la cola de descarga
 - **AND** para cada item, firma únicamente los assets esenciales: B02, B03, B04 y SCL
 - **AND** EXCLUYE explícitamente el asset `visual` de la lista de descarga para evitar redundancia
 - **AND** descarga el archivo `.tif` original completo sin aplicar ningún recorte (no-cropping) ni máscara espacial
 - **AND** guarda los archivos resultantes preservando las dimensiones originales del tile de Sentinel-2
-- **AND** crea la estructura de carpetas `Data_Sentinel/[Año]/[Mes]/[Día]`
+- **AND** crea la estructura de carpetas `~/Documents/Data_Sentinel/[Año]/[Mes]/[Día]`
 - **AND** guarda los archivos con la fecha de adquisición, el ID del tile y el nombre de la banda (ej: `20250101_MPS_B02.tif`)
 
 #### Scenario: Omisión de descarga por datos existentes
 - **WHEN** el usuario inicia el proceso de descarga para una fecha seleccionada
-- **AND** el sistema verifica que la carpeta `Data_Sentinel/[Año]/[Mes]/[Día]` YA contiene los archivos `.tif` correspondientes a las bandas requeridas para todos los tiles seleccionados
+- **AND** el sistema verifica que la carpeta `~/Documents/Data_Sentinel/[Año]/[Mes]/[Día]` YA contiene los archivos `.tif` correspondientes a las bandas requeridas para todos los tiles seleccionados
 - **THEN** el sistema SHALL omitir la descarga para esa fecha específica
 - **AND** SHALL informar al usuario que los datos ya se encuentran disponibles localmente
 
 ### Requirement: Estructura de Almacenamiento Jerárquica (RF-07)
-El sistema SHALL organizar las descargas en la estructura `Data_Sentinel/[Año]/[Mes]/[Día]/` garantizando que los nombres de carpetas tengan ceros a la izquierda para meses y días (ej: `01` para Enero).
+El sistema SHALL organizar las descargas en la estructura `~/Documents/Data_Sentinel/[Año]/[Mes]/[Día]/` garantizando que los nombres de carpetas tengan ceros a la izquierda para meses y días (ej: `01` para Enero).
 
 #### Scenario: Creación automática de estructura de carpetas
 - **WHEN** se guardan archivos para una fecha nueva
-- **THEN** el sistema crea automáticamente la jerarquía `Data_Sentinel/[Año]/[Mes]/[Día]/` en el directorio raíz del proyecto o ruta configurada
+- **THEN** el sistema crea automáticamente la jerarquía `~/Documents/Data_Sentinel/[Año]/[Mes]/[Día]/` en el directorio de documentos del usuario
 - **AND** almacena los archivos completos en dicha carpeta
 
 ## Acceptance Criteria

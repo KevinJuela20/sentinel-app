@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_BANDS = ["B02", "B03", "B04", "SCL"]
 
 
+def get_data_root() -> Path:
+    """
+    Retorna la ruta raíz centralizada para datos de Sentinel-2.
+
+    La ruta es ~/Documents/Data_Sentinel. Si el directorio no existe,
+    se crea automáticamente (incluyendo padres intermedios).
+
+    Returns:
+        Objeto Path del directorio raíz de datos.
+    """
+    root = Path.home() / "Documents" / "Data_Sentinel"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def get_output_dir(base_dir: str, year: int, month: int, day: int) -> Path:
     """
     Genera y crea la ruta de salida jerárquica.
