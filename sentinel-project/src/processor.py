@@ -29,6 +29,75 @@ logger = logging.getLogger(__name__)
 # 8: Cloud Medium Probability, 9: Cloud High Probability, 10: Thin Cirrus
 CLOUD_CODES = [1, 2, 3, 8, 9, 10]
 
+# ---------------------------------------------------------------------------
+# Asignación fija de IDs de celdas de borde a su tile preferente.
+# Las celdas que se ubican en los límites entre tiles solo se recortarán
+# desde el tile asignado para evitar duplicados y recortes parciales.
+# ---------------------------------------------------------------------------
+IDS_POR_TILE = {
+    "MPS": ["657", "658", "659", "660", "661", "663", "664", "665", "666", "667", "668",
+            "669", "670", "671", "672", "673", "674", "675", "676", "677", "678", "679",
+            "680", "681", "682", "683", "684", "685", "686"],
+
+    "MQS": ["722", "763", "804", "845", "886", "927", "944", "945", "946", "959", "960",
+            "961", "962", "963", "964", "965", "966", "967", "968", "969", "970", "971",
+            "972", "973", "974", "975", "1009", "1050", "1091", "1132", "1255", "1296",
+            "1337", "1378"],
+
+    "MQT": ["894", "935", "976", "977", "978", "979", "980", "981", "982", "1017", "1058",
+            "1099", "1140", "1181", "1222", "1263", "1304", "1345", "1386", "1427"],
+}
+
+# Diccionario invertido: ID → tile asignado (búsqueda O(1))
+_TILE_POR_ID: Dict[str, str] = {
+    cell_id: tile
+    for tile, ids in IDS_POR_TILE.items()
+    for cell_id in ids
+}
+
+
+def should_process_cell(cell_id: str, tile_id: str, crops_dir: Path, date_str: str) -> bool:
+    """
+    Determina si una celda debe procesarse en el tile actual.
+
+    Lógica de deduplicación:
+      1. Si el cell_id está en IDS_POR_TILE (borde), solo se procesa
+         en el tile asignado.
+      2. Si el cell_id NO está en la lista, se verifica si ya existe
+         un recorte guardado en disco para esa celda y fecha.
+
+    Args:
+        cell_id: Identificador de la celda de la cuadrícula.
+        tile_id: Tile que se está procesando actualmente (ej: MPS).
+        crops_dir: Directorio donde se guardan los recortes PNG.
+        date_str: Fecha compacta (YYYYMMDD) para el nombre del archivo.
+
+    Returns:
+        True si la celda debe procesarse, False si debe omitirse.
+    """
+    assigned_tile = _TILE_POR_ID.get(cell_id)
+
+    if assigned_tile is not None:
+        # Caso 1: ID de borde — solo procesar en el tile asignado
+        if tile_id != assigned_tile:
+            logger.info(
+                "Celda %s omitida: asignada al tile %s, tile actual es %s",
+                cell_id, assigned_tile, tile_id,
+            )
+            return False
+        return True
+
+    # Caso 2: ID no listado — verificar existencia previa en disco
+    existing = list(crops_dir.glob(f"{cell_id}_{date_str}_*.png"))
+    if existing:
+        logger.info(
+            "Celda %s omitida: ya existe recorte previo (%s)",
+            cell_id, existing[0].name,
+        )
+        return False
+
+    return True
+
 
 def is_crop_clean(scl_data: np.ndarray, threshold: float = 0.05) -> tuple[bool, float]:
     """
@@ -192,7 +261,7 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
     crops_dir.mkdir(exist_ok=True)
     
     # 4. Procesar cada celda
-    stats = {"total": len(grid_gdf), "saved": 0, "skipped": 0, "errors": 0}
+    stats = {"total": len(grid_gdf), "saved": 0, "skipped": 0, "errors": 0, "dedup_skipped": 0}
     # Obtener fecha del path: .../YYYY/MM/DD
     try:
         y, m, d = date_dir.parts[-3:]
@@ -205,6 +274,11 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
         for _, row in grid_gdf.iterrows():
             cell_id = str(row.get("id", row.index[0]))
             geom = row.geometry.__geo_interface__
+            
+            # Filtro de deduplicación: verificar si la celda debe procesarse
+            if not should_process_cell(cell_id, tile_id, crops_dir, date_str):
+                stats["dedup_skipped"] += 1
+                continue
             
             res = process_grid_cell(bands_found, geom, cell_id, crops_dir, date_str, tile_id)
             if res:

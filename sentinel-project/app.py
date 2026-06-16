@@ -569,7 +569,7 @@ def _run_grid_processing(delete_originals: bool):
 
     st.write(f"🔍 Encontradas **{len(date_dirs)} fechas** para procesar.")
     
-    overall_stats = {"saved": 0, "skipped": 0}
+    overall_stats = {"saved": 0, "skipped": 0, "dedup_skipped": 0}
     
     for ddir in date_dirs:
         with st.status(f"⚡ Procesando fecha: `{ddir.relative_to(base_dir)}`", expanded=True) as status:
@@ -580,9 +580,14 @@ def _run_grid_processing(delete_originals: bool):
                 st.error(res["error"])
                 continue
                 
-            st.write(f"✅ Guardados: **{res['saved']}** | ☁️ Omitidos: **{res['skipped']}**")
+            st.write(
+                f"✅ Guardados: **{res['saved']}** | "
+                f"☁️ Omitidos: **{res['skipped']}** | "
+                f"🔁 Deduplicados: **{res.get('dedup_skipped', 0)}**"
+            )
             overall_stats["saved"] += res["saved"]
             overall_stats["skipped"] += res["skipped"]
+            overall_stats["dedup_skipped"] += res.get("dedup_skipped", 0)
             status.update(label=f"✅ Fecha completada: {ddir.name}", state="complete")
 
     st.session_state["grid_processed"] = True # Task 1.2
@@ -591,7 +596,8 @@ def _run_grid_processing(delete_originals: bool):
     st.success(
         f"🎯 **Procesamiento finalizado.**\n"
         f"- Total recortes generados: **{overall_stats['saved']}**\n"
-        f"- Total áreas nubladas descartadas: **{overall_stats['skipped']}**"
+        f"- Total áreas nubladas descartadas: **{overall_stats['skipped']}**\n"
+        f"- Total celdas deduplicadas (borde/existente): **{overall_stats['dedup_skipped']}**"
     )
     
     if delete_originals:
