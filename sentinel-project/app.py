@@ -642,16 +642,16 @@ def _run_super_res_process():
     _reset_app_state()
     
     # --- Galería de Comparación (Task 3.3) ---
-    if last_processed:
-        st.divider()
-        st.subheader("🔍 Comparativa Antes vs Después")
-        original_path = Path(str(last_processed).replace("_SR.png", ".png").replace("super_res", "crops"))
+    # if last_processed:
+    #     st.divider()
+    #     st.subheader("🔍 Comparativa Antes vs Después")
+    #     original_path = Path(str(last_processed).replace("_SR.png", ".png").replace("super_res", "crops"))
         
-        col_orig, col_sr = st.columns(2)
-        with col_orig:
-            st.image(str(original_path), caption="Original (128x128)", width="stretch")
-        with col_sr:
-            st.image(str(last_processed), caption="Super-Resolución (1024x1024)", width="stretch")
+    #     col_orig, col_sr = st.columns(2)
+    #     with col_orig:
+    #         st.image(str(original_path), caption="Original (128x128)", width="stretch")
+    #     with col_sr:
+    #         st.image(str(last_processed), caption="Super-Resolución (1024x1024)", width="stretch")
 
 
 # ---------------------------------------------------------------------------
