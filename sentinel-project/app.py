@@ -8,7 +8,7 @@ UC-01: Búsqueda temporal y espacial de imágenes (RF-01)
 UC-02: Previsualización con máscara AOI (RF-02)
 UC-03: Selección de imágenes y cola de descarga (RF-03)
 """
-
+import re
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
