@@ -8,6 +8,7 @@ UC-01: Búsqueda temporal y espacial de imágenes (RF-01)
 UC-02: Previsualización con máscara AOI (RF-02)
 UC-03: Selección de imágenes y cola de descarga (RF-03)
 """
+from streamlit import cursor
 import re
 import logging
 import os
@@ -23,7 +24,9 @@ from src.downloader import download_item_bands
 from src.file_manager import get_output_dir, DEFAULT_BANDS, check_date_data_exists, get_data_root
 from src.processor import process_all_grids
 from src.super_resolution import process_super_res_batch
+from datetime import datetime
 
+current_year = datetime.now().year
 # ---------------------------------------------------------------------------
 # Configuración de la aplicación
 # ---------------------------------------------------------------------------
@@ -143,8 +146,8 @@ def render_sidebar() -> dict | None:
             anio_inicio = st.number_input(
                 "Año inicio",
                 min_value=2015,
-                max_value=2030,
-                value=2025,
+                max_value=current_year,
+                value=current_year,
                 step=1,
                 key="anio_inicio",
                 label_visibility="collapsed",
@@ -156,15 +159,15 @@ def render_sidebar() -> dict | None:
                 "Mes fin",
                 options=list(MESES.keys()),
                 format_func=lambda m: MESES[m],
-                index=2,
+                index=0,
                 key="mes_fin",
                 label_visibility="collapsed",
             )
             anio_fin = st.number_input(
                 "Año fin",
                 min_value=2015,
-                max_value=2030,
-                value=2025,
+                max_value=current_year,
+                value=current_year,
                 step=1,
                 key="anio_fin",
                 label_visibility="collapsed",
