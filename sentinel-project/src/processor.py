@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Códigos SCL a filtrar (nubes, sombras, etc.)
 # 1: Saturated/Defective, 2: Dark Area Pixels, 3: Cloud Shadows
 # 8: Cloud Medium Probability, 9: Cloud High Probability, 10: Thin Cirrus
-CLOUD_CODES = [1, 2, 3, 8, 9, 10]
+CLOUD_CODES = [1, 2, 3, 7, 8, 9, 10]
 
 # ---------------------------------------------------------------------------
 # Asignación fija de IDs de celdas de borde a su tile preferente.
@@ -360,20 +360,38 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
                 # 5.3 Realizar el merge de los recortes de cada tile
                 mosaic, mosaic_transform = merge(tile_rgb_crops)
                 
-                # 5.4 Guardar mosaico final al lado de la carpeta crops
+                # 5.4 Normalizar de uint16 (0-10000 reflectancia Sentinel-2) a uint8 (0-255)
+                # Sin este paso el mosaico se ve completamente negro en visores de imagen.
+                # Percentiles 2-98 para recortar outliers y maximizar contraste visual.
+                mosaic_norm = np.zeros_like(mosaic, dtype=np.uint8)
+                for i in range(mosaic.shape[0]):
+                    band = mosaic[i].astype(np.float32)
+                    # Ignorar píxeles nodata (valor 0) para el cálculo de percentiles
+                    valid = band[band > 0]
+                    if valid.size == 0:
+                        continue
+                    p2, p98 = np.percentile(valid, 2), np.percentile(valid, 98)
+                    if p98 > p2:
+                        band = np.clip((band - p2) / (p98 - p2) * 255, 0, 255)
+                    else:
+                        band = np.clip(band / 10000.0 * 255, 0, 255)
+                    mosaic_norm[i] = band.astype(np.uint8)
+                
+                # 5.5 Guardar mosaico final normalizado (uint8, compatible con visores)
                 y, m, d = date_dir.parts[-3:]
                 final_mosaic_name = f"Color_{y}-{m}-{d}.tif"
                 mosaic_path = date_dir / final_mosaic_name
                 
                 out_meta = tile_rgb_crops[0].meta.copy()
                 out_meta.update({
-                    "height": mosaic.shape[1],
-                    "width": mosaic.shape[2],
-                    "transform": mosaic_transform
+                    "height": mosaic_norm.shape[1],
+                    "width": mosaic_norm.shape[2],
+                    "transform": mosaic_transform,
+                    "dtype": "uint8",
                 })
                 
                 with rasterio.open(mosaic_path, "w", **out_meta) as dest:
-                    dest.write(mosaic)
+                    dest.write(mosaic_norm)
                 
                 logger.info("Mosaico RGB del área de estudio creado: %s", mosaic_path)
                 mosaic_success = True

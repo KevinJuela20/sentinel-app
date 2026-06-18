@@ -560,14 +560,23 @@ def _run_grid_processing(delete_originals: bool):
         return
 
     base_dir = get_data_root()
-    # Buscar carpetas de días (YYYY/MM/DD)
-    date_dirs = [d for d in base_dir.rglob("*") if d.is_dir() and any(d.glob("*.tif"))]
-    
+    # Buscar carpetas de días (YYYY/MM/DD) que tengan .tif pendientes
+    all_date_dirs = [d for d in base_dir.rglob("*") if d.is_dir() and any(d.glob("*.tif"))]
+    all_date_dirs.pop("DC_Layers")
+
+    # Filtrar fechas que ya fueron procesadas (tienen crops/*.png en disco)
+    date_dirs = [d for d in all_date_dirs if not any((d / "super_res").glob("*.png"))]
+    already_done = len(all_date_dirs) - len(date_dirs)
+
+    if already_done > 0:
+        st.info(f"⏭️ Se omiten **{already_done} fecha(s)** ya procesadas (tienen recortes en disco).")
+
     if not date_dirs:
-        st.warning("⚠️ No se encontraron carpetas con archivos `.tif` para procesar.")
+        st.success("✅ Todas las fechas descargadas ya han sido procesadas.")
+        st.session_state["grid_processed"] = True
         return
 
-    st.write(f"🔍 Encontradas **{len(date_dirs)} fechas** para procesar.")
+    st.write(f"🔍 Encontradas **{len(date_dirs)} fecha(s) nuevas** para procesar.")
     
     overall_stats = {"saved": 0, "skipped": 0, "dedup_skipped": 0}
     
