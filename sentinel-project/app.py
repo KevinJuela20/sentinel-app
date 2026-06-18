@@ -449,7 +449,11 @@ def _render_selection_summary():
     # --- Procesamiento de Cuadrícula (UC-05: Tasks 3.1 + 3.2 + 3.3) ---
     # Solo si hay archivos en Data_Sentinel
     sentinel_data_path = get_data_root()
-    if sentinel_data_path.exists() and any(sentinel_data_path.rglob("*.tif")):
+    if sentinel_data_path.exists() and any(
+        f for f in sentinel_data_path.rglob("*.tif")
+        if "DC_Layers" not in f.parts
+        and not re.match(r"Color_\d{4}-\d{2}-\d{2}\.tif", f.name)
+    ):
         st.divider()
         st.subheader("🤖 Preparación para IA (Recortes y Filtrado)")
         st.info(
@@ -562,7 +566,6 @@ def _run_grid_processing(delete_originals: bool):
     base_dir = get_data_root()
     # Buscar carpetas de días (YYYY/MM/DD) que tengan .tif pendientes
     all_date_dirs = [d for d in base_dir.rglob("*") if d.is_dir() and any(d.glob("*.tif"))]
-    all_date_dirs.pop("DC_Layers")
 
     # Filtrar fechas que ya fueron procesadas (tienen crops/*.png en disco)
     date_dirs = [d for d in all_date_dirs if not any((d / "super_res").glob("*.png"))]
