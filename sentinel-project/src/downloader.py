@@ -23,9 +23,17 @@ logger = logging.getLogger(__name__)
 def sign_asset_url(url: str) -> str:
     """
     Firma una URL de asset usando el SDK de Planetary Computer.
+    Si la URL ya tiene un token SAS (expirado o no), lo remueve antes de firmar
+    para forzar la generación de un nuevo token válido y evitar errores 403.
     """
     try:
-        return pc.sign_url(url)
+        from urllib.parse import urlparse, urlunparse
+        
+        # Eliminar cualquier query parameter (SAS token) existente
+        parsed = urlparse(url)
+        clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, '', parsed.fragment))
+        
+        return pc.sign_url(clean_url)
     except Exception as exc:
         logger.error("Error al firmar URL %s: %s", url, exc)
         raise

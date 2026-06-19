@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Códigos SCL a filtrar (nubes, sombras, etc.)
 # 1: Saturated/Defective, 2: Dark Area Pixels, 3: Cloud Shadows
 # 8: Cloud Medium Probability, 9: Cloud High Probability, 10: Thin Cirrus
-CLOUD_CODES = [1, 2, 3, 7, 8, 9, 10]
+CLOUD_CODES = [1, 2, 3, 8, 9, 10]
 
 # ---------------------------------------------------------------------------
 # Asignación fija de IDs de celdas de borde a su tile preferente.
