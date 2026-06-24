@@ -115,7 +115,7 @@ def render_sidebar() -> dict | None:
         'Buscar', o None si aún no se ha iniciado la búsqueda.
     """
     with st.sidebar:
-        st.title("🛰️ Sentinel Data Downloader")
+        st.title("Detección de Cambios con IA")
         st.caption("Descarga y procesa imágenes Sentinel-2 L2A")
         st.divider()
 
@@ -190,6 +190,7 @@ def render_sidebar() -> dict | None:
                 "mes_fin": int(mes_fin),
                 "anio_fin": int(anio_fin),
             }
+        
 
     return None
 
@@ -201,7 +202,7 @@ def render_sidebar() -> dict | None:
 def render_main(search_params: dict | None):
     """Renderiza el contenido principal de la aplicación."""
 
-    st.title("🛰️ Sentinel Data Downloader")
+    st.title("🛰️ Detección de Cambios con IA")
     st.markdown(
         "Busca, previsualiza y descarga imágenes satelitales **Sentinel-2 L2A** "
         "desde Microsoft Planetary Computer."
