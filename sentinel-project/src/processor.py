@@ -360,24 +360,15 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
                 # 5.3 Realizar el merge de los recortes de cada tile
                 mosaic, mosaic_transform = merge(tile_rgb_crops)
                 
-                # 5.4 Normalizar de uint16 (0-10000 reflectancia Sentinel-2) a uint8 (0-255)
-                # Sin este paso el mosaico se ve completamente negro en visores de imagen.
-                # Percentiles 2-98 para recortar outliers y maximizar contraste visual.
-                mosaic_norm = np.zeros_like(mosaic, dtype=np.uint8)
+                # 5.4 Aplicar clip a reflectancia máxima de 3500 (uint16)
+                # Preserva los valores nativos de Sentinel-2 pero recorta outliers brillantes
+                mosaic_norm = np.zeros_like(mosaic, dtype=np.uint16)
                 for i in range(mosaic.shape[0]):
                     band = mosaic[i].astype(np.float32)
-                    # Ignorar píxeles nodata (valor 0) para el cálculo de percentiles
-                    valid = band[band > 0]
-                    if valid.size == 0:
-                        continue
-                    p2, p98 = np.percentile(valid, 2), np.percentile(valid, 98)
-                    if p98 > p2:
-                        band = np.clip((band - p2) / (p98 - p2) * 255, 0, 255)
-                    else:
-                        band = np.clip(band / 10000.0 * 255, 0, 255)
-                    mosaic_norm[i] = band.astype(np.uint8)
+                    band = np.clip(band, 0, 3500)
+                    mosaic_norm[i] = band.astype(np.uint16)
                 
-                # 5.5 Guardar mosaico final normalizado (uint8, compatible con visores)
+                # 5.5 Guardar mosaico final (uint16)
                 y, m, d = date_dir.parts[-3:]
                 final_mosaic_name = f"Color_{y}-{m}-{d}.tif"
                 mosaic_path = date_dir / final_mosaic_name
@@ -387,7 +378,7 @@ def process_all_grids(date_dir: Path, grid_path: Path, delete_originals: bool = 
                     "height": mosaic_norm.shape[1],
                     "width": mosaic_norm.shape[2],
                     "transform": mosaic_transform,
-                    "dtype": "uint8",
+                    "dtype": "uint16",
                 })
                 
                 with rasterio.open(mosaic_path, "w", **out_meta) as dest:
