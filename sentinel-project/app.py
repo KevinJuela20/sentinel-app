@@ -12,6 +12,7 @@ from streamlit import cursor
 import re
 import logging
 import os
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -492,6 +493,9 @@ def _render_selection_summary():
         st.subheader("✨ Super-Resolución IA")
         st.info("💡 **Paso previo requerido:** Debe generar los recortes limpios en la sección superior antes de iniciar el aumento de resolución.")
 
+    # --- Entrega de Resultados (Descarga final) ---
+    _render_download_results()
+
 
 def _run_download_process(queue: dict):
     """Ejecuta el proceso de descarga con barra de progreso."""
@@ -668,6 +672,74 @@ def _run_super_res_process():
     #         st.image(str(original_path), caption="Original (128x128)", width="stretch")
     #     with col_sr:
     #         st.image(str(last_processed), caption="Super-Resolución (1024x1024)", width="stretch")
+
+
+def _render_download_results():
+    """Genera la interfaz para descargar los resultados (mosaico y super_res) empacados en ZIP."""
+    base_dir = get_data_root()
+    if not base_dir.exists():
+        return
+
+    # Buscar carpetas de fechas procesadas que tengan super_res
+    date_dirs = [d for d in base_dir.rglob("*") if d.is_dir() and (d / "super_res").exists()]
+    
+    # Adicionalmente verificar que tengan al menos el mosaico Color_*.tif
+    valid_dirs = []
+    for d in date_dirs:
+        mosaics = list(d.glob("Color_*.tif"))
+        if mosaics:
+            valid_dirs.append(d)
+
+    if not valid_dirs:
+        return
+
+    st.divider()
+    st.subheader("💾 Descarga de Resultados Finales")
+    st.info("Descargue el mosaico y las imágenes redimensionadas generadas.")
+
+    for ddir in sorted(valid_dirs, reverse=True):
+        date_str = ddir.name
+        month_str = ddir.parent.name
+        year_str = ddir.parent.parent.name
+        full_date = f"{year_str}-{month_str}-{date_str}"
+        
+        mosaic_files = list(ddir.glob("Color_*.tif"))
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"**Resultados de la fecha {full_date}**")
+            st.caption("Incluye: Mosaico RGB (.tif) y carpeta super_res/ (.png)")
+            
+        with col2:
+            export_dir = base_dir / "exports"
+            export_dir.mkdir(exist_ok=True)
+            zip_filename = f"Resultados_{full_date}.zip"
+            zip_path = export_dir / zip_filename
+            
+            if not zip_path.exists():
+                if st.button(f"Empaquetar {full_date}", key=f"pack_{full_date}", type="secondary"):
+                    with st.spinner("Creando archivo ZIP..."):
+                        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                            # Añadir el mosaico
+                            for mosaic_file in mosaic_files:
+                                zipf.write(mosaic_file, arcname=mosaic_file.name)
+                            # Añadir super_res
+                            super_res_dir = ddir / "super_res"
+                            for root_path, _, files in os.walk(super_res_dir):
+                                for file in files:
+                                    file_path = Path(root_path) / file
+                                    arcname = Path("super_res") / file_path.relative_to(super_res_dir)
+                                    zipf.write(file_path, arcname=str(arcname))
+                    st.rerun()
+            else:
+                with open(zip_path, "rb") as f:
+                    st.download_button(
+                        label=f"⬇️ Descargar ZIP",
+                        data=f,
+                        file_name=zip_filename,
+                        mime="application/zip",
+                        key=f"dl_{full_date}"
+                    )
 
 
 # ---------------------------------------------------------------------------
