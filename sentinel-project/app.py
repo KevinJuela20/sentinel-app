@@ -659,7 +659,7 @@ def _run_super_res_process():
     st.balloons()
     
     # Reiniciar estado para permitir nuevo proceso (Task 3.2)
-    _reset_app_state()
+    # _reset_app_state()  # Comentado para evitar el reinicio antes de empaquetar
     
     # --- Galería de Comparación (Task 3.3) ---
     # if last_processed:
@@ -738,7 +738,8 @@ def _render_download_results():
                         data=f,
                         file_name=zip_filename,
                         mime="application/zip",
-                        key=f"dl_{full_date}"
+                        key=f"dl_{full_date}",
+                        on_click=_reset_app_state
                     )
 
 
